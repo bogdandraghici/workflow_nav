@@ -47,6 +47,68 @@ function css(str) {
   return o;
 }
 
+/* ---- one-level-deeper subworkflow traces ----
+   The four extProcessLawOne instances each call seven child subworkflows
+   (put external in kb, tag chunks, ...). The real run references them by
+   instanceUuid/resourceId but does not capture their inner nodes, so these
+   templates synthesise a plausible trace per child — named after what the
+   subworkflow does and reusing the run's node vocabulary (Start / script /
+   NoSQL data source / End Flow 001). Node durations are distributed by the
+   `w` weights so they sum to the child's real duration. */
+const FX_COLLECTION = '9cf67f58-ca39-4ecd-a381-f000b608f193_eb782faf-99bb-4b79-9b24-77ce81bb44ce';
+const SUBFLOW_TEMPLATES = [
+  { wf: 'extPutExternalInKb', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'fetch external document', t: 'script', w: 3 },
+    { n: 'chunk content', t: 'script', w: 4 },
+    { n: 'embed chunks', t: 'ds', w: 6, op: 'INSERT', payload: '{"$set": {"embedding": "[…]"}}' },
+    { n: 'upsert to knowledge base', t: 'ds', w: 5, op: 'UPDATE', payload: '{"$set": {"indexed": true}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  { wf: 'extTagChunks', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'load chunks', t: 'ds', w: 2, op: 'FIND', filter: '{"$and": [{"chunkOf": "%DOC%"}]}' },
+    { n: 'classify chunks', t: 'script', w: 8 },
+    { n: 'write chunk tags', t: 'ds', w: 6, op: 'UPDATE', payload: '{"$set": {"tags": ["…"]}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  { wf: 'extSummariseChunks', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'load chunks', t: 'ds', w: 2, op: 'FIND', filter: '{"$and": [{"chunkOf": "%DOC%"}]}' },
+    { n: 'summarise each chunk', t: 'script', w: 9 },
+    { n: 'store chunk summaries', t: 'ds', w: 4, op: 'UPDATE', payload: '{"$set": {"chunkSummary": "…"}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  { wf: 'extSummariseSections', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'group chunks into sections', t: 'script', w: 3 },
+    { n: 'summarise sections', t: 'script', w: 9 },
+    { n: 'store section summaries', t: 'ds', w: 4, op: 'UPDATE', payload: '{"$set": {"sectionSummary": "…"}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  { wf: 'extSummariseLaw', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'assemble section summaries', t: 'script', w: 3 },
+    { n: 'summarise law', t: 'script', w: 9 },
+    { n: 'store law summary', t: 'ds', w: 4, op: 'UPDATE', payload: '{"$set": {"lawSummary": "…"}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  { wf: 'extComputeScores', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'compute relevance scores', t: 'script', w: 10 },
+    { n: 'find linked documents', t: 'ds', w: 4, op: 'FIND', filter: '{"$and": [{"processingStatus": "yes"}]}' },
+    { n: 'rank linked documents', t: 'script', w: 6 },
+    { n: 'persist scores and linked docs', t: 'ds', w: 5, op: 'UPDATE', payload: '{"$set": {"scores": {}, "linkedDocs": []}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  { wf: 'extSubworkflow007', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'Script 001', t: 'script', w: 6 },
+    { n: 'Database Operation 001', t: 'ds', w: 4, op: 'FIND', filter: '{"$and": [{"_id": "%DOC%"}]}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+];
+
 /* ============================ TraceDetail ============================ */
 /* Faithful port of TraceDetail.dc.html renderVals + template. */
 function TraceDetail({ detail }) {
@@ -140,28 +202,55 @@ class TraceExplorer extends React.Component {
   leaf(type, name, dur) { return { key: this.uid('n'), type, name, duration: dur, status: 'finished', children: [], instances: [] }; }
   sub(name, dur, instances) { return { key: this.uid('n'), type: 'subworkflow', name, duration: dur, status: 'finished', children: [], instances }; }
   inst(wf, dur, nodes, id) { return { key: this.uid('i'), rowType: 'instance', workflowName: wf, instanceId: id || this.iid(), invocationType: 'Synchronous', triggeredFrom: 'AUTOMATIC', status: 'finished', duration: dur, nodes }; }
-  subLeaf(name, dur, uuid, defId) { return { key: this.uid('n'), type: 'subworkflow', name, duration: dur, status: 'finished', children: [], instances: [], instanceUuid: uuid, defId }; }
+  subLeaf(name, dur, uuid, resourceId) { return { key: this.uid('n'), type: 'subworkflow', name, duration: dur, status: 'finished', children: [], instances: [], instanceUuid: uuid, resourceId }; }
   ds(name, dur, info) { return { key: this.uid('n'), type: 'datasource', name, duration: dur, status: 'finished', children: [], instances: [], dsInfo: info }; }
   fork(name, dur, cond) { return { key: this.uid('n'), type: 'fork', name, duration: dur, status: 'finished', children: [], instances: [], cond }; }
   loopFork(name, dur, isIf) { return this.fork(name, dur, isIf ? { type: 'IF', expr: 'input["i"] < len(input["names"])' } : { type: 'ELSE' }); }
+  // Build the fictional nested instance for a child subworkflow, distributing `total`
+  // across its template nodes by weight (the heaviest node absorbs the rounding remainder).
+  fictInstance(tmpl, total, uuid, resourceId, docId) {
+    const totalW = tmpl.nodes.reduce((s, x) => s + x.w, 0) || 1;
+    const durs = tmpl.nodes.map(x => Math.round((x.w / totalW) * total));
+    let mi = 0; tmpl.nodes.forEach((x, i) => { if (x.w > tmpl.nodes[mi].w) mi = i; });
+    durs[mi] += total - durs.reduce((a, b) => a + b, 0);
+    const defFilter = '{"$and": [{"_id": "' + docId + '"}]}';
+    const nodes = tmpl.nodes.map((x, i) => {
+      if (x.t === 'start') return this.leaf('start', x.n, 0);
+      if (x.t === 'end') return this.leaf('end', x.n, durs[i]);
+      if (x.t === 'ds') return this.ds(x.n, durs[i], { operation: x.op || 'FIND', collection: FX_COLLECTION, opName: x.n, filter: (x.filter || defFilter).replace('%DOC%', docId), payload: x.payload || '', responseTime: 6, responseSize: 96, status: 'SUCCESS' });
+      return this.leaf('script', x.n, durs[i]);
+    });
+    const inst = this.inst(tmpl.wf, total, nodes, uuid);
+    inst.resourceId = resourceId;
+    return inst;
+  }
   lawInstance(m) {
     const COLL = '9cf67f58-ca39-4ecd-a381-f000b608f193_eb782faf-99bb-4b79-9b24-77ce81bb44ce';
     const NAMES = ['put external in kb', 'tag chunks', 'summarise chunks', 'summarise sections', 'summarise law', 'compute scores and linked docs', 'Subworkflow 007'];
-    const DEFIDS = ['a273de23-13f2-4d37-a65e-84a8d27365ec', '735b62ee-f5fa-48d1-998f-4b57d6e23c03', 'bad718e7-2aed-4763-86a9-d1d57a34cc12', 'd6653fb4-bc37-4d7b-ad07-fb410b005b19', '5caf4845-a54c-443e-b63d-3bce4db7374b', '642927f2-a8ed-4580-97a6-c53eb1c0e0dc', '4e43a6ed-4842-423a-8f73-180cff0ed35e'];
+    // subWorkflowResourceId of each child node (constant across all four instances).
+    // The trace reports subWorkflowResourceDefinitionId as null for these nodes, so this is the Resource ID.
+    const RESOURCE_IDS = ['a273de23-13f2-4d37-a65e-84a8d27365ec', '735b62ee-f5fa-48d1-998f-4b57d6e23c03', 'bad718e7-2aed-4763-86a9-d1d57a34cc12', 'd6653fb4-bc37-4d7b-ad07-fb410b005b19', '5caf4845-a54c-443e-b63d-3bce4db7374b', '642927f2-a8ed-4580-97a6-c53eb1c0e0dc', '4e43a6ed-4842-423a-8f73-180cff0ed35e'];
     const nodes = [this.leaf('start', 'Start', 0)];
-    NAMES.forEach((nm, i) => nodes.push(this.subLeaf(nm, m.sub[i], m.child[i], DEFIDS[i])));
+    NAMES.forEach((nm, i) => {
+      // Each child subworkflow is now drillable one level deeper into a synthesised instance.
+      const node = this.subLeaf(nm, m.sub[i], m.child[i], RESOURCE_IDS[i]);
+      node.instances = [this.fictInstance(SUBFLOW_TEMPLATES[i], m.sub[i], m.child[i], RESOURCE_IDS[i], m.docId)];
+      nodes.push(node);
+    });
     nodes.push(this.leaf('script', 'update Entry output', m.tail[0]));
     nodes.push(this.ds('update status', m.tail[1], { operation: 'UPDATE', collection: COLL, opName: 'update status', filter: '{"$and": [{"_id": "' + m.docId + '"}]}', payload: '{"$set": {"processingStatus": "yes"}}', responseTime: m.dsRt, responseSize: 54, status: 'SUCCESS' }));
     nodes.push(this.leaf('script', 'next name', m.tail[2]));
     nodes.push(this.leaf('end', 'End Flow 001', m.tail[3]));
-    return this.inst('extProcessLawOne', m.total, nodes, m.uuid);
+    // Instance duration is the subworkflow instance's own span (dateStarted -> dateFinished),
+    // which is a few tens of ms shorter than m.total (the parent "process law" node's execution duration).
+    return this.inst('extProcessLawOne', m.instMs, nodes, m.uuid);
   }
   build() {
     const COLL = '9cf67f58-ca39-4ecd-a381-f000b608f193_eb782faf-99bb-4b79-9b24-77ce81bb44ce';
-    const EVEN1 = { uuid: 'cdafaa6a-8896-427e-9e27-d6e9cd2d9be9', total: 423509, docId: '6a4e65e873742f9d3168f041', dsRt: 7, sub: [446, 13304, 6057, 10889, 7250, 380183, 4998], tail: [153, 51, 74, 48], child: ['2452f9cf-a6b4-4187-acd6-7ab804ada5c1', 'b3bfdcbd-f607-4a4c-a030-56d8969443a2', '381ce479-f1bb-49e9-b76c-d32f1d2f53e2', '09583343-f3de-4186-852e-fcb612168b5a', '42e90061-1e1b-4aaf-a769-38ab996b5853', '3f561420-3d3c-418b-bc35-944e3f4990e7', 'd2c3d5fd-5b8b-47a5-94fd-1ae6417c6ac8'] };
-    const EVEN2 = { uuid: '8adc5df8-c5a5-4f58-b627-2146cf2c654c', total: 432869, docId: '6a4e663373742f9d3168f045', dsRt: 7, sub: [402, 16940, 35601, 12339, 11413, 349644, 6100], tail: [156, 59, 67, 65], child: ['b3ce3ac4-a90a-47a7-8f2a-c7005c857582', '3aac0c68-68d1-45f8-a572-ea11e12c4ea0', 'a33314cc-83d2-4957-8c11-b570b532410b', 'c4789386-7d67-4543-8a38-9ec1b02bb1c1', '2d3a6fbf-531e-437a-8e91-73c0b3aec871', 'c0bd3ca5-ece7-4899-afd2-9d2942a8e651', '18c883bf-91b7-44a3-8617-9b637d19edb7'] };
-    const ODD1 = { uuid: '0b456232-441f-49a1-a3df-b4db4a51a2df', total: 358375, docId: '6a4e660f73742f9d3168f043', dsRt: 7, sub: [407, 13041, 2648, 9225, 7617, 321032, 3892], tail: [209, 81, 118, 54], child: ['6bacb030-193a-4863-a908-6f7a66a44a33', '15f715c7-3e8e-4edf-a923-477763bd7ac9', 'd63cde47-a5e6-450a-ae01-f16727fe0dcd', 'd9259069-b5b3-4d79-a4be-49abf9a7692c', 'c7dc1da6-9d93-4745-bb75-e703bb3fd9ca', 'd947475e-4df6-40eb-891f-647541bc4d03', '38594a33-9095-4081-aafc-1a8d25879379'] };
-    const ODD2 = { uuid: '1008663e-9a27-4ab7-beb9-49b625cb21e9', total: 501863, docId: '6a4e666873742f9d3168f048', dsRt: 8, sub: [441, 19855, 21113, 14616, 11079, 427710, 6652], tail: [160, 63, 88, 37], child: ['3e1b086c-4218-4dd7-bf55-c9f6046cb3ce', '0acefc37-0768-485c-ac64-7bb9e5caea9e', '4b35d79d-58b3-400e-9eab-752bf150972f', '63bd8d14-01e7-469b-b5fe-e71947a27f0f', '20e88976-0180-4aab-8f82-4cec38d61b6a', '280e7195-15c5-4755-bcc0-8092dcf85624', '8d753152-e178-4c59-b934-2c3ae52e6664'] };
+    const EVEN1 = { uuid: 'cdafaa6a-8896-427e-9e27-d6e9cd2d9be9', total: 423509, instMs: 423457, docId: '6a4e65e873742f9d3168f041', dsRt: 7, sub: [446, 13304, 6057, 10889, 7250, 380183, 4998], tail: [153, 51, 74, 48], child: ['2452f9cf-a6b4-4187-acd6-7ab804ada5c1', 'b3bfdcbd-f607-4a4c-a030-56d8969443a2', '381ce479-f1bb-49e9-b76c-d32f1d2f53e2', '09583343-f3de-4186-852e-fcb612168b5a', '42e90061-1e1b-4aaf-a769-38ab996b5853', '3f561420-3d3c-418b-bc35-944e3f4990e7', 'd2c3d5fd-5b8b-47a5-94fd-1ae6417c6ac8'] };
+    const EVEN2 = { uuid: '8adc5df8-c5a5-4f58-b627-2146cf2c654c', total: 432869, instMs: 432791, docId: '6a4e663373742f9d3168f045', dsRt: 7, sub: [402, 16940, 35601, 12339, 11413, 349644, 6100], tail: [156, 59, 67, 65], child: ['b3ce3ac4-a90a-47a7-8f2a-c7005c857582', '3aac0c68-68d1-45f8-a572-ea11e12c4ea0', 'a33314cc-83d2-4957-8c11-b570b532410b', 'c4789386-7d67-4543-8a38-9ec1b02bb1c1', '2d3a6fbf-531e-437a-8e91-73c0b3aec871', 'c0bd3ca5-ece7-4899-afd2-9d2942a8e651', '18c883bf-91b7-44a3-8617-9b637d19edb7'] };
+    const ODD1 = { uuid: '0b456232-441f-49a1-a3df-b4db4a51a2df', total: 358375, instMs: 358329, docId: '6a4e660f73742f9d3168f043', dsRt: 7, sub: [407, 13041, 2648, 9225, 7617, 321032, 3892], tail: [209, 81, 118, 54], child: ['6bacb030-193a-4863-a908-6f7a66a44a33', '15f715c7-3e8e-4edf-a923-477763bd7ac9', 'd63cde47-a5e6-450a-ae01-f16727fe0dcd', 'd9259069-b5b3-4d79-a4be-49abf9a7692c', 'c7dc1da6-9d93-4745-bb75-e703bb3fd9ca', 'd947475e-4df6-40eb-891f-647541bc4d03', '38594a33-9095-4081-aafc-1a8d25879379'] };
+    const ODD2 = { uuid: '1008663e-9a27-4ab7-beb9-49b625cb21e9', total: 501863, instMs: 501820, docId: '6a4e666873742f9d3168f048', dsRt: 8, sub: [441, 19855, 21113, 14616, 11079, 427710, 6652], tail: [160, 63, 88, 37], child: ['3e1b086c-4218-4dd7-bf55-c9f6046cb3ce', '0acefc37-0768-485c-ac64-7bb9e5caea9e', '4b35d79d-58b3-400e-9eab-752bf150972f', '63bd8d14-01e7-469b-b5fe-e71947a27f0f', '20e88976-0180-4aab-8f82-4cec38d61b6a', '280e7195-15c5-4755-bcc0-8092dcf85624', '8d753152-e178-4c59-b934-2c3ae52e6664'] };
     const evenPath = { key: this.uid('p'), type: 'path', name: 'Even names', duration: 856722, status: 'finished', instances: [], children: [
       this.loopFork('loop in names even', 107, true),
       this.sub('process even law', 423509, [this.lawInstance(EVEN1)]),
@@ -295,6 +384,7 @@ class TraceExplorer extends React.Component {
     if (n.rowType === 'instance') {
       const p = n._parent, isAgent = p && p.type === 'agent';
       const rows = [{ k: 'Subworkflow', v: n.workflowName, mono: false }, { k: 'Instance ID', v: n.instanceId, mono: true }, { k: 'Type', v: n.invocationType, mono: false }, { k: 'Triggered from', v: n.triggeredFrom, mono: false }];
+      if (n.resourceId) rows.splice(2, 0, { k: 'Resource ID', v: n.resourceId, mono: true });
       if (p) rows.push({ k: 'Called as tool by', v: p.name + '  ·  ' + this.typeLabel(p.type), mono: false });
       return { empty: false, kind: isAgent ? 'Workflow instance · agent tool call' : 'Workflow instance', title: n.workflowName, statusLabel: 'FINISHED', statusColor: '#007457', statusBg: '#e6f2ef', durText: this.fmt(n.duration), metaRows: rows, logs: this.synthLogs(n.nodes, n.workflowName) };
     }
@@ -314,7 +404,7 @@ class TraceExplorer extends React.Component {
     if (n.type === 'root' && n.instanceUuid) rows.push({ k: 'Instance ID', v: n.instanceUuid, mono: true });
     if (n.type === 'subworkflow' && n.instanceUuid) {
       rows.push({ k: 'Instance ID', v: n.instanceUuid, mono: true });
-      rows.push({ k: 'Definition ID', v: n.defId, mono: true });
+      rows.push({ k: 'Resource ID', v: n.resourceId, mono: true });
       rows.push({ k: 'Nested trace', v: 'Not captured in this run', mono: false });
     }
     if (n.instances && n.instances.length) rows.push({ k: n.instances.length > 1 ? 'Spawned instances' : 'Executes', v: (n.instances.length > 1 ? n.instances.length + ' × ' : '') + n.instances[0].workflowName, mono: false });
