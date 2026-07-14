@@ -345,6 +345,8 @@ class TraceExplorer extends React.Component {
   gotoNode(i, nodeKey) { this.setState(s => ({ scope: s.scope.slice(0, i), sel: nodeKey, crumbOpen: null })); }
   switchInst(i, instKey) { this.setState(s => { const st = s.scope.slice(0, i + 1); st[i] = { ...st[i], instKey }; return { scope: st, sel: instKey, crumbOpen: null }; }); }
   toggle(key) { this.setState(s => { const n = new Set(s.exp); n.has(key) ? n.delete(key) : n.add(key); return { exp: n }; }); }
+  // Select a node and toggle its inline expansion in one click (whole-row expand).
+  selectToggle(key) { this.setState(s => { const n = new Set(s.exp); n.has(key) ? n.delete(key) : n.add(key); return { exp: n, sel: key }; }); }
   // Every expandable key reachable from `list`: structural nodes (parallel, paths,
   // agent) expand inline; drillable subworkflow nodes open via drill-down, not inline.
   collectExpandableKeys(list, acc) {
@@ -381,8 +383,7 @@ class TraceExplorer extends React.Component {
       icon: t.icon, iconStyle: { fontSize: isz + 'px', color: iconColor, flexShrink: 0 },
       label: node.name, labelStyle: this.labelStyle(node.type === 'path' || node.type === 'end', fs, node.status === 'finished'),
       instBadge: isTool ? this.instLabel(node) : null, durText: this.fmt(node.duration), durStyle: this.durStyle(),
-      onSelect: isTool ? () => this.drill(node.key) : () => this.setState({ sel: node.key }),
-      onToggle: (e) => { if (e) e.stopPropagation(); this.toggle(node.key); },
+      onSelect: isTool ? () => this.drill(node.key) : (struct ? () => this.selectToggle(node.key) : () => this.setState({ sel: node.key })),
     };
   }
   flattenScope(list, depth, out, ctx) {
@@ -575,7 +576,7 @@ class TraceExplorer extends React.Component {
                 {rows.map((r) => (
                   <div key={r.key} className={r.sel ? undefined : 'h-f7'} onClick={r.onSelect} style={r.rowStyle}>
                     <div style={{ width: r.indent + 'px', flexShrink: 0 }}></div>
-                    <div onClick={r.onToggle} style={r.caretStyle}><i className={'ph ' + r.caretIcon} style={{ fontSize: '13px', color: '#8390a2' }}></i></div>
+                    <div style={r.caretStyle}><i className={'ph ' + r.caretIcon} style={{ fontSize: '13px', color: '#8390a2' }}></i></div>
                     <i className={'ph ' + r.icon} style={r.iconStyle}></i>
                     <span style={r.labelStyle}>{r.label}</span>
                     {r.instBadge && <span style={css('display:inline-flex; align-items:center; gap:4px; background:#eef1f5; color:#475263; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:120px; border:1px solid #d7dde5;')}><i className="ph ph-stack" style={{ fontSize: '11px' }}></i>{r.instBadge}</span>}
