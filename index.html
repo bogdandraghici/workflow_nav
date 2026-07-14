@@ -378,7 +378,7 @@ class TraceExplorer extends React.Component {
     if (isTool) box = sel ? 'inset 0 0 0 1px #b0d1f3' : 'inset 0 0 0 1px #e3e8ed';
     return {
       key: node.key, isTool, drillHint: isTool, indent: depth * 18, sel,
-      rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', minHeight: mh + 'px', padding: '3px 8px', borderRadius: '7px', cursor: 'pointer', background: sel ? '#e6f0fb' : (isTool ? '#fbfdff' : 'transparent'), boxShadow: box },
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', minHeight: mh + 'px', padding: '3px 8px', borderRadius: '7px', cursor: 'pointer', background: sel ? '#e6f0fb' : 'transparent', boxShadow: box },
       caretStyle: this.caretStyle(struct), caretIcon: open ? 'ph-caret-down' : 'ph-caret-right',
       icon: t.icon, iconStyle: { fontSize: isz + 'px', color: iconColor, flexShrink: 0 },
       label: node.name, labelStyle: this.labelStyle(node.type === 'path' || node.type === 'end', fs, node.status === 'finished'),
