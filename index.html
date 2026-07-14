@@ -361,8 +361,7 @@ class TraceExplorer extends React.Component {
     const iconColor = node.status === 'finished' ? '#007457' : (isTool ? '#006bd8' : t.color);
     const sel = ctx.sel === node.key;
     let box = 'none';
-    if (isTool) box = sel ? 'inset 2px 0 0 #006bd8, inset 0 0 0 1px #b0d1f3' : 'inset 0 0 0 1px #e3e8ed';
-    else if (sel) box = 'inset 2px 0 0 #006bd8';
+    if (isTool) box = sel ? 'inset 0 0 0 1px #b0d1f3' : 'inset 0 0 0 1px #e3e8ed';
     return {
       key: node.key, isTool, drillHint: isTool, indent: depth * 18, sel,
       rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', minHeight: mh + 'px', padding: '3px 8px', borderRadius: '7px', cursor: 'pointer', background: sel ? '#e6f0fb' : (isTool ? '#fbfdff' : 'transparent'), boxShadow: box },
@@ -491,14 +490,16 @@ class TraceExplorer extends React.Component {
 
           {/* header */}
           <div style={css('padding:22px 24px 16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #e3e8ed;')}>
-            <div style={css('flex:1; display:flex; align-items:center; gap:12px;')}>
+            <div style={css('width:34px; flex-shrink:0;')}></div>
+            <div style={css('flex:1; display:flex; align-items:center; justify-content:center; gap:12px;')}>
               <div style={css('font-size:21px; font-weight:800; letter-spacing:-0.01em;')}>extLawParalel2</div>
               <div style={css('display:inline-flex; align-items:center; gap:6px; background:#e6f2ef; color:#007457; font-size:11px; font-weight:700; letter-spacing:0.06em; padding:4px 10px; border-radius:120px;')}><i className="ph ph-check-circle" style={{ fontSize: '13px' }}></i>FINISHED</div>
             </div>
-            <div className="h-f7" style={css('width:34px; height:34px; border-radius:8px; display:grid; place-items:center; color:#64748b; cursor:pointer;')}><i className="ph ph-x" style={{ fontSize: '18px' }}></i></div>
+            <div className="h-f7" style={css('width:34px; height:34px; border-radius:8px; display:grid; place-items:center; color:#64748b; cursor:pointer; flex-shrink:0;')}><i className="ph ph-x" style={{ fontSize: '18px' }}></i></div>
           </div>
 
-          {/* breadcrumb */}
+          {/* breadcrumb — only when drilled at least one level deep */}
+          {canUp && (
           <div style={css('padding:10px 24px; background:#f7f8f9; border-bottom:1px solid #e3e8ed; display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-height:46px;')}>
             {crumbs.map((c, i) => (
               <React.Fragment key={i}>
@@ -531,6 +532,7 @@ class TraceExplorer extends React.Component {
               </React.Fragment>
             ))}
           </div>
+          )}
 
           {/* scope summary */}
           {showSummary && (
