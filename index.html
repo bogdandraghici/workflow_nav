@@ -345,6 +345,18 @@ class TraceExplorer extends React.Component {
   gotoNode(i, nodeKey) { this.setState(s => ({ scope: s.scope.slice(0, i), sel: nodeKey, crumbOpen: null })); }
   switchInst(i, instKey) { this.setState(s => { const st = s.scope.slice(0, i + 1); st[i] = { ...st[i], instKey }; return { scope: st, sel: instKey, crumbOpen: null }; }); }
   toggle(key) { this.setState(s => { const n = new Set(s.exp); n.has(key) ? n.delete(key) : n.add(key); return { exp: n }; }); }
+  // Every expandable key reachable from `list`: structural nodes (parallel, paths,
+  // agent) expand inline; drillable subworkflow nodes open via drill-down, not inline.
+  collectExpandableKeys(list, acc) {
+    (list || []).forEach(node => {
+      const isTool = node.instances && node.instances.length > 0;
+      const struct = !isTool && node.children && node.children.length > 0;
+      if (struct) { acc.push(node.key); this.collectExpandableKeys(node.children, acc); }
+    });
+    return acc;
+  }
+  expandAll() { this.setState(s => ({ exp: new Set([...s.exp, ...this.collectExpandableKeys(this.listFor(s.scope), [])]) })); }
+  collapseAll() { this.setState({ exp: new Set() }); }
 
   caretStyle(show) { return { width: '18px', height: '18px', flexShrink: 0, display: 'grid', placeItems: 'center', borderRadius: '4px', cursor: 'pointer', visibility: show ? 'visible' : 'hidden' }; }
   labelStyle(muted, fs, ok) { const color = ok ? (muted ? '#5a9e88' : '#007457') : (muted ? '#64748b' : '#1d232c'); return { flex: 1, minWidth: 0, fontSize: fs + 'px', fontWeight: 600, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }; }
@@ -555,6 +567,10 @@ class TraceExplorer extends React.Component {
           {/* body */}
           <div style={css('flex:1; display:flex; min-height:0;')}>
             <div style={css('width:440px; flex-shrink:0; border-right:1px solid #e3e8ed; display:flex; flex-direction:column; min-height:0;')}>
+              <div style={css('display:flex; align-items:center; justify-content:flex-end; gap:6px; padding:8px 12px 6px; border-bottom:1px solid #e3e8ed;')}>
+                <button className="h-f7" onClick={() => this.expandAll()} style={css('display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:6px; border:1px solid #cbd1db; background:#fff; color:#475263; font-size:11.5px; font-weight:600; cursor:pointer;')}><i className="ph ph-arrows-out-line-vertical" style={{ fontSize: '13px' }}></i>Expand all</button>
+                <button className="h-f7" onClick={() => this.collapseAll()} style={css('display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:6px; border:1px solid #cbd1db; background:#fff; color:#475263; font-size:11.5px; font-weight:600; cursor:pointer;')}><i className="ph ph-arrows-in-line-vertical" style={{ fontSize: '13px' }}></i>Collapse all</button>
+              </div>
               <div className="trk" style={css('flex:1; overflow-y:auto; padding:12px 8px 20px; min-height:0; display:flex; flex-direction:column; gap:1px;')}>
                 {rows.map((r) => (
                   <div key={r.key} className={r.sel ? undefined : 'h-f7'} onClick={r.onSelect} style={r.rowStyle}>
