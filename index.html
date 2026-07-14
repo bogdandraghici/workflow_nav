@@ -387,7 +387,8 @@ class TraceExplorer extends React.Component {
       const last = i === segs.length - 1;
       if (seg.root) { out.push({ isRoot: true, sepCaret: false, sepTool: false, icon: 'ph-flow-arrow', iconStyle: { fontSize: '13px', color: '#1d232c' }, label: 'extLawParalel2', onGoto: () => this.gotoSeg(0), chipStyle: this.crumbChip(last, segs.length > 1), clickable: segs.length > 1, hasSwitcher: false, options: [] }); return; }
       const tool = this.index[seg.nodeKey], insts = tool.instances, cur = insts.findIndex(x => x.key === seg.instKey);
-      const isAgentNode = tool.type === 'agent';
+      // Represent the crumb with the same icon the node carries in the tree.
+      const treeIcon = this.TYPE[tool.type] || this.TYPE.subworkflow;
       // The "called as a tool by" marker only appears for genuine agent tool calls
       // (nodes carrying calledAsToolBy) — not for ordinary subworkflow drill-downs.
       const caller = tool.calledAsToolBy;
@@ -397,12 +398,12 @@ class TraceExplorer extends React.Component {
         byIcon: caller && caller.isAgent ? 'ph-robot' : 'ph-tree-structure',
         byIconStyle: { fontSize: '13px', color: caller && caller.isAgent ? '#f2a56b' : '#7fb3ec' },
         onGotoBy: (e) => { if (e) e.stopPropagation(); this.gotoNode(i, seg.nodeKey); },
-        icon: isAgentNode ? 'ph-robot' : 'ph-cube', iconStyle: { fontSize: '12px', color: isAgentNode ? '#d97706' : '#006bd8' },
+        icon: treeIcon.icon, iconStyle: { fontSize: '12px', color: treeIcon.color },
         label: insts[cur].workflowName.replace(/^\[test\]/, '') + ' · Instance ' + (cur + 1),
         hasSwitcher: insts.length > 1, dropOpen: this.state.crumbOpen === i,
         onGoto: () => this.gotoSeg(i), clickable: true,
         onToggleDrop: (e) => { if (e) e.stopPropagation(); this.setState(st => ({ crumbOpen: st.crumbOpen === i ? null : i })); },
-        options: insts.map((inst, idx) => ({ label: 'Instance ' + (idx + 1), meta: this.fmt(inst.duration), style: this.dropItem(idx === cur), onPick: (e) => { if (e) e.stopPropagation(); this.switchInst(i, inst.key); } })),
+        options: insts.map((inst, idx) => ({ label: 'Instance ' + (idx + 1), meta: this.fmt(inst.duration), icon: treeIcon.icon, iconColor: treeIcon.color, style: this.dropItem(idx === cur), onPick: (e) => { if (e) e.stopPropagation(); this.switchInst(i, inst.key); } })),
         chipStyle: this.crumbChip(last, true),
       });
     });
@@ -518,7 +519,7 @@ class TraceExplorer extends React.Component {
                       <div style={css('font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#a6b0be; padding:5px 10px 6px;')}>Switch instance</div>
                       {c.options.map((o, j) => (
                         <div key={j} className="h-f7" onClick={o.onPick} style={o.style}>
-                          <span style={css('display:inline-flex; align-items:center; gap:6px;')}><i className="ph ph-cube" style={css('font-size:13px; color:#006bd8;')}></i>{o.label}</span>
+                          <span style={css('display:inline-flex; align-items:center; gap:6px;')}><i className={'ph ' + o.icon} style={{ fontSize: '13px', color: o.iconColor }}></i>{o.label}</span>
                           <span style={css('font-size:11px; color:#8390a2; font-variant-numeric:tabular-nums;')}>{o.meta}</span>
                         </div>
                       ))}
@@ -533,7 +534,9 @@ class TraceExplorer extends React.Component {
           {showSummary && (
             <div style={css('padding:13px 24px; border-bottom:1px solid #e3e8ed; display:flex; flex-direction:column; gap:10px;')}>
               <div style={css('display:flex; align-items:center; gap:14px; flex-wrap:wrap;')}>
-                <div style={summary.iconWrapStyle}><i className={'ph ' + summary.icon} style={summary.iconStyle}></i></div>
+                {canUp && (
+                  <button className="h-f7" onClick={() => this.gotoSeg(this.state.scope.length - 2)} title="Up" style={css('width:34px; height:34px; border-radius:8px; border:1px solid #cbd1db; background:#fff; display:grid; place-items:center; color:#475263; cursor:pointer; flex-shrink:0;')}><i className="ph ph-arrow-u-up-left" style={{ fontSize: '16px' }}></i></button>
+                )}
                 <div style={css('min-width:0;')}>
                   <div style={css('display:flex; align-items:center; gap:8px;')}><span style={css('font-size:15px; font-weight:700;')}>{summary.title}</span><span style={css('font-size:9.5px; font-weight:700; letter-spacing:0.06em; color:#007457; background:#e6f2ef; padding:2px 7px; border-radius:120px;')}>FINISHED</span></div>
                   <div style={css('font-size:11.5px; color:#64748b; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; margin-top:2px;')}>{summary.subline}</div>
@@ -549,13 +552,7 @@ class TraceExplorer extends React.Component {
           {/* body */}
           <div style={css('flex:1; display:flex; min-height:0;')}>
             <div style={css('width:440px; flex-shrink:0; border-right:1px solid #e3e8ed; display:flex; flex-direction:column; min-height:0;')}>
-              <div style={css('padding:12px 16px 8px; display:flex; align-items:center; justify-content:space-between;')}>
-                <div style={css('font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#64748b;')}>Nodes in this scope</div>
-                {canUp && (
-                  <button className="h-f7" onClick={() => this.gotoSeg(this.state.scope.length - 2)} style={css('display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 9px; border:1px solid #cbd1db; background:#fff; border-radius:6px; font:inherit; font-size:11.5px; font-weight:600; color:#475263; cursor:pointer;')}><i className="ph ph-arrow-u-up-left" style={{ fontSize: '13px' }}></i>Up</button>
-                )}
-              </div>
-              <div className="trk" style={css('flex:1; overflow-y:auto; padding:2px 8px 20px; min-height:0; display:flex; flex-direction:column; gap:1px;')}>
+              <div className="trk" style={css('flex:1; overflow-y:auto; padding:12px 8px 20px; min-height:0; display:flex; flex-direction:column; gap:1px;')}>
                 {rows.map((r) => (
                   <div key={r.key} className={r.sel ? undefined : 'h-f7'} onClick={r.onSelect} style={r.rowStyle}>
                     <div style={{ width: r.indent + 'px', flexShrink: 0 }}></div>
