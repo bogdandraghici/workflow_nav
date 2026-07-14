@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trace Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Open Sans', system-ui, sans-serif; background: #dfe4ea; color: #1d232c; -webkit-font-smoothing: antialiased; }
+  a { color: #006bd8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .trk::-webkit-scrollbar { width: 10px; height: 10px; }
+  .trk::-webkit-scrollbar-thumb { background: #cbd1db; border-radius: 8px; border: 3px solid transparent; background-clip: content-box; }
+  .trk::-webkit-scrollbar-track { background: transparent; }
+  .fx-tip { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .12s cubic-bezier(0.2,0,0.2,1); transform: translateX(-50%); }
+  .fx-tip-wrap:hover .fx-tip { opacity: 1; visibility: visible; }
+  /* Hover feedback — the design's style-hover intent, made to actually win over inline backgrounds. */
+  .h-f7:hover { background: #f7f8f9 !important; }
+  .h-e6:hover { background: #e6f0fb !important; }
+  .h-d6:hover { background: #d6e4f5 !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+/* ---- style string -> React style object (mirrors dc-runtime cssToObj) ---- */
+function css(str) {
+  const o = {};
+  for (const decl of str.split(';')) {
+    const i = decl.indexOf(':');
+    if (i < 0) continue;
+    const prop = decl.slice(0, i).trim();
+    if (!prop) continue;
+    const key = prop.startsWith('--') ? prop : prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    o[key] = decl.slice(i + 1).trim();
+  }
+  return o;
+}
+
+/* ============================ TraceDetail ============================ */
+/* Faithful port of TraceDetail.dc.html renderVals + template. */
+function TraceDetail({ detail }) {
+  const d = detail || {};
+  const empty = !!d.empty || !d.title;
+  if (empty) {
+    return (
+      <div style={css("font-family: 'Open Sans', system-ui, sans-serif;")}>
+        <div style={css('display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:60px 20px; color:#a6b0be; text-align:center;')}>
+          <i className="ph ph-cursor-click" style={{ fontSize: '30px' }}></i>
+          <div style={css('font-size:13px; color:#64748b;')}>Select a node or instance to inspect its logs.</div>
+        </div>
+      </div>
+    );
+  }
+  const metaRows = (d.metaRows || []).map((m, i, arr) => ({
+    k: m.k, v: m.v,
+    rowStyle: { display: 'flex', gap: '12px', padding: '10px 14px', background: i % 2 ? '#fbfcfd' : '#fff', borderBottom: i < arr.length - 1 ? '1px solid #eef1f4' : 'none' },
+    valStyle: { fontSize: '12.5px', fontWeight: 600, color: '#1d232c', flex: 1, minWidth: 0, wordBreak: 'break-all', fontFamily: m.mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit' },
+  }));
+  const logRows = (d.logs || []).map(l => ({
+    text: l.text, ts: l.ts,
+    textStyle: { flex: 1, minWidth: 0, fontSize: '13px', lineHeight: '20px', color: l.kind === 'ok' ? '#007457' : l.kind === 'err' ? '#d11f00' : '#475263', fontWeight: l.kind === 'ok' ? 600 : 400 },
+  }));
+  const statusChipStyle = { display: 'inline-flex', alignItems: 'center', gap: '5px', background: d.statusBg || '#e6f2ef', color: d.statusColor || '#007457', fontSize: '10px', fontWeight: 700, letterSpacing: '0.06em', padding: '3px 9px', borderRadius: '120px' };
+
+  return (
+    <div style={css("font-family: 'Open Sans', system-ui, sans-serif;")}>
+      <div>
+        <div style={css('display:flex; align-items:center; gap:10px; margin-bottom:3px;')}>
+          <div style={css('font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#64748b;')}>{d.kind}</div>
+        </div>
+        <div style={css('display:flex; align-items:center; gap:12px; margin-bottom:16px;')}>
+          <div style={css('font-size:17px; font-weight:700; color:#1d232c;')}>{d.title}</div>
+          <div style={statusChipStyle}><i className="ph ph-check-circle" style={{ fontSize: '12px' }}></i>{d.statusLabel}</div>
+          <div style={css('font-size:12px; color:#8390a2; font-variant-numeric:tabular-nums;')}>{d.durText}</div>
+        </div>
+
+        {metaRows.length > 0 && (
+          <div style={css('border:1px solid #e3e8ed; border-radius:12px; overflow:hidden; margin-bottom:20px;')}>
+            {metaRows.map((m, i) => (
+              <div key={i} style={m.rowStyle}>
+                <div style={css('font-size:12.5px; color:#64748b; width:130px; flex-shrink:0;')}>{m.k}</div>
+                <div style={m.valStyle}>{m.v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={css('font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#64748b; margin-bottom:6px;')}>Execution log</div>
+        <div>
+          {logRows.map((l, i) => (
+            <div key={i} style={css('display:flex; align-items:baseline; gap:16px; padding:7px 0; border-bottom:1px solid #f2f4f6;')}>
+              <div style={l.textStyle}>{l.text}</div>
+              <div style={css('font-size:11.5px; color:#a6b0be; flex-shrink:0; font-variant-numeric:tabular-nums;')}>{l.ts}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ Trace Explorer ============================ */
+/* Faithful port of Trace Explorer.dc.html (DCLogic Component). */
+class TraceExplorer extends React.Component {
+  constructor(props) {
+    super(props);
+    this.TYPE = {
+      root:        { icon: 'ph-flow-arrow',             color: '#1d232c' },
+      script:      { icon: 'ph-code',                   color: '#5b6a7e' },
+      datasource:  { icon: 'ph-database',               color: '#006bd8' },
+      fork:        { icon: 'ph-git-branch',             color: '#b44c14' },
+      start:       { icon: 'ph-play',                   color: '#007457' },
+      end:         { icon: 'ph-flag-checkered',         color: '#5b6a7e' },
+      parallel:    { icon: 'ph-arrows-split',           color: '#006bd8' },
+      path:        { icon: 'ph-arrow-elbow-down-right', color: '#8390a2' },
+      subworkflow: { icon: 'ph-tree-structure',         color: '#006bd8' },
+    };
+    this._seq = 0;
+    this._irand = 0;
+    this.root = this.build();
+    this.index = {};
+    this.indexAll(this.root, null);
+    this.state = { scope: [{ root: true }], exp: new Set(), sel: 'root', crumbOpen: null };
+  }
+
+  // ---------- data ----------
+  uid(p) { return p + '-' + (this._seq++).toString(36); }
+  iid() { const h = '0123456789abcdef'; const r = n => Array.from({ length: n }, () => h[Math.floor(Math.random() * 16)]).join(''); return `${r(8)}-${r(4)}-${r(4)}-${r(4)}-${r(12)}`; }
+  leaf(type, name, dur) { return { key: this.uid('n'), type, name, duration: dur, status: 'finished', children: [], instances: [] }; }
+  sub(name, dur, instances) { return { key: this.uid('n'), type: 'subworkflow', name, duration: dur, status: 'finished', children: [], instances }; }
+  inst(wf, dur, nodes, id) { return { key: this.uid('i'), rowType: 'instance', workflowName: wf, instanceId: id || this.iid(), invocationType: 'Synchronous', triggeredFrom: 'AUTOMATIC', status: 'finished', duration: dur, nodes }; }
+  subLeaf(name, dur, uuid, defId) { return { key: this.uid('n'), type: 'subworkflow', name, duration: dur, status: 'finished', children: [], instances: [], instanceUuid: uuid, defId }; }
+  ds(name, dur, info) { return { key: this.uid('n'), type: 'datasource', name, duration: dur, status: 'finished', children: [], instances: [], dsInfo: info }; }
+  fork(name, dur, cond) { return { key: this.uid('n'), type: 'fork', name, duration: dur, status: 'finished', children: [], instances: [], cond }; }
+  loopFork(name, dur, isIf) { return this.fork(name, dur, isIf ? { type: 'IF', expr: 'input["i"] < len(input["names"])' } : { type: 'ELSE' }); }
+  lawInstance(m) {
+    const COLL = '9cf67f58-ca39-4ecd-a381-f000b608f193_eb782faf-99bb-4b79-9b24-77ce81bb44ce';
+    const NAMES = ['put external in kb', 'tag chunks', 'summarise chunks', 'summarise sections', 'summarise law', 'compute scores and linked docs', 'Subworkflow 007'];
+    const DEFIDS = ['a273de23-13f2-4d37-a65e-84a8d27365ec', '735b62ee-f5fa-48d1-998f-4b57d6e23c03', 'bad718e7-2aed-4763-86a9-d1d57a34cc12', 'd6653fb4-bc37-4d7b-ad07-fb410b005b19', '5caf4845-a54c-443e-b63d-3bce4db7374b', '642927f2-a8ed-4580-97a6-c53eb1c0e0dc', '4e43a6ed-4842-423a-8f73-180cff0ed35e'];
+    const nodes = [this.leaf('start', 'Start', 0)];
+    NAMES.forEach((nm, i) => nodes.push(this.subLeaf(nm, m.sub[i], m.child[i], DEFIDS[i])));
+    nodes.push(this.leaf('script', 'update Entry output', m.tail[0]));
+    nodes.push(this.ds('update status', m.tail[1], { operation: 'UPDATE', collection: COLL, opName: 'update status', filter: '{"$and": [{"_id": "' + m.docId + '"}]}', payload: '{"$set": {"processingStatus": "yes"}}', responseTime: m.dsRt, responseSize: 54, status: 'SUCCESS' }));
+    nodes.push(this.leaf('script', 'next name', m.tail[2]));
+    nodes.push(this.leaf('end', 'End Flow 001', m.tail[3]));
+    return this.inst('extProcessLawOne', m.total, nodes, m.uuid);
+  }
+  build() {
+    const COLL = '9cf67f58-ca39-4ecd-a381-f000b608f193_eb782faf-99bb-4b79-9b24-77ce81bb44ce';
+    const EVEN1 = { uuid: 'cdafaa6a-8896-427e-9e27-d6e9cd2d9be9', total: 423509, docId: '6a4e65e873742f9d3168f041', dsRt: 7, sub: [446, 13304, 6057, 10889, 7250, 380183, 4998], tail: [153, 51, 74, 48], child: ['2452f9cf-a6b4-4187-acd6-7ab804ada5c1', 'b3bfdcbd-f607-4a4c-a030-56d8969443a2', '381ce479-f1bb-49e9-b76c-d32f1d2f53e2', '09583343-f3de-4186-852e-fcb612168b5a', '42e90061-1e1b-4aaf-a769-38ab996b5853', '3f561420-3d3c-418b-bc35-944e3f4990e7', 'd2c3d5fd-5b8b-47a5-94fd-1ae6417c6ac8'] };
+    const EVEN2 = { uuid: '8adc5df8-c5a5-4f58-b627-2146cf2c654c', total: 432869, docId: '6a4e663373742f9d3168f045', dsRt: 7, sub: [402, 16940, 35601, 12339, 11413, 349644, 6100], tail: [156, 59, 67, 65], child: ['b3ce3ac4-a90a-47a7-8f2a-c7005c857582', '3aac0c68-68d1-45f8-a572-ea11e12c4ea0', 'a33314cc-83d2-4957-8c11-b570b532410b', 'c4789386-7d67-4543-8a38-9ec1b02bb1c1', '2d3a6fbf-531e-437a-8e91-73c0b3aec871', 'c0bd3ca5-ece7-4899-afd2-9d2942a8e651', '18c883bf-91b7-44a3-8617-9b637d19edb7'] };
+    const ODD1 = { uuid: '0b456232-441f-49a1-a3df-b4db4a51a2df', total: 358375, docId: '6a4e660f73742f9d3168f043', dsRt: 7, sub: [407, 13041, 2648, 9225, 7617, 321032, 3892], tail: [209, 81, 118, 54], child: ['6bacb030-193a-4863-a908-6f7a66a44a33', '15f715c7-3e8e-4edf-a923-477763bd7ac9', 'd63cde47-a5e6-450a-ae01-f16727fe0dcd', 'd9259069-b5b3-4d79-a4be-49abf9a7692c', 'c7dc1da6-9d93-4745-bb75-e703bb3fd9ca', 'd947475e-4df6-40eb-891f-647541bc4d03', '38594a33-9095-4081-aafc-1a8d25879379'] };
+    const ODD2 = { uuid: '1008663e-9a27-4ab7-beb9-49b625cb21e9', total: 501863, docId: '6a4e666873742f9d3168f048', dsRt: 8, sub: [441, 19855, 21113, 14616, 11079, 427710, 6652], tail: [160, 63, 88, 37], child: ['3e1b086c-4218-4dd7-bf55-c9f6046cb3ce', '0acefc37-0768-485c-ac64-7bb9e5caea9e', '4b35d79d-58b3-400e-9eab-752bf150972f', '63bd8d14-01e7-469b-b5fe-e71947a27f0f', '20e88976-0180-4aab-8f82-4cec38d61b6a', '280e7195-15c5-4755-bcc0-8092dcf85624', '8d753152-e178-4c59-b934-2c3ae52e6664'] };
+    const evenPath = { key: this.uid('p'), type: 'path', name: 'Even names', duration: 856722, status: 'finished', instances: [], children: [
+      this.loopFork('loop in names even', 107, true),
+      this.sub('process even law', 423509, [this.lawInstance(EVEN1)]),
+      this.leaf('script', 'next name even', 65),
+      this.loopFork('loop in names even', 60, true),
+      this.sub('process even law', 432869, [this.lawInstance(EVEN2)]),
+      this.leaf('script', 'next name even', 48),
+      this.loopFork('loop in names even', 47, false),
+    ] };
+    const oddPath = { key: this.uid('p'), type: 'path', name: 'Odd names', duration: 860683, status: 'finished', instances: [], children: [
+      this.leaf('script', 'Script 002', 110),
+      this.loopFork('loop in names odd', 52, true),
+      this.sub('process odd law', 358375, [this.lawInstance(ODD1)]),
+      this.leaf('script', 'next name odd', 92),
+      this.loopFork('loop in names odd', 61, true),
+      this.sub('process odd law', 501863, [this.lawInstance(ODD2)]),
+      this.leaf('script', 'next name odd', 57),
+      this.loopFork('loop in names odd', 52, false),
+    ] };
+    const parallel = { key: this.uid('n'), type: 'parallel', name: 'Start Parallel 001', duration: 860683, status: 'finished', instances: [], children: [evenPath, oddPath] };
+    return { key: 'root', type: 'root', name: 'extLawParalel2', status: 'finished', duration: 861128, instanceUuid: 'c42b9208-1db4-4ff9-989c-958ab600507b', instances: [], children: [
+      this.leaf('start', 'Start', 0),
+      this.fork('Condition 002', 37, { type: 'ELSE' }),
+      this.ds('Database Operation 001', 18, { operation: 'FIND', collection: COLL, opName: 'find all not processed without site', filter: '{"$and": [{"processingStatus": {"$ne": "yes"}}]}', limit: 100, responseTime: 5, responseSize: 27877, status: 'SUCCESS' }),
+      this.fork('Condition 001', 63, { type: 'IF', expr: 'len(input["documentsToProcessing"]["data"]) > 0' }),
+      this.leaf('script', 'prepare name', 127),
+      this.leaf('script', 'test input', 60),
+      parallel,
+      this.leaf('end', 'End Parallel 001', 0),
+      this.leaf('end', 'End Flow 001', 25),
+    ] };
+  }
+  indexAll(node, parent) {
+    this.index[node.key] = node;
+    (node.instances || []).forEach(i => { this.index[i.key] = i; i._parent = node; i.nodes.forEach(n => this.indexAll(n, i)); });
+    (node.children || []).forEach(c => this.indexAll(c, node));
+  }
+  hasKids(n) { return (n.instances && n.instances.length) || (n.children && n.children.length); }
+  fmt(ms) {
+    if (ms == null) return '';
+    if (ms < 1000) return ms + ' ms';
+    if (ms < 60000) { const s = ms / 1000; return (s < 10 ? s.toFixed(1) : Math.round(s)) + ' s'; }
+    const t = Math.round(ms / 1000), m = Math.floor(t / 60), r = t % 60;
+    return m + 'm ' + String(r).padStart(2, '0') + 's';
+  }
+  instLabel(node) { const c = node.instances ? node.instances.length : 0; return c > 1 ? (c + ' instances') : null; }
+  typeLabel(t) { return { root: 'Workflow', script: 'Script node', datasource: 'Database operation', fork: 'Condition node', start: 'Start node', end: 'End node', parallel: 'Parallel gateway', path: 'Parallel path', subworkflow: 'Subworkflow node' }[t] || 'Node'; }
+
+  // ---------- navigation ----------
+  listFor(stack) { const seg = stack[stack.length - 1]; return seg.root ? this.root.children : this.index[seg.instKey].nodes; }
+  containerFor(stack) { const seg = stack[stack.length - 1]; return seg.root ? this.root : this.index[seg.instKey]; }
+  drill(nodeKey) { this.setState(s => { const insts = this.index[nodeKey].instances; return { scope: [...s.scope, { nodeKey, instKey: insts[0].key }], sel: insts[0].key, crumbOpen: null }; }); }
+  gotoSeg(i) { this.setState(s => { const st = s.scope.slice(0, i + 1); const seg = st[i]; return { scope: st, sel: seg.root ? 'root' : seg.instKey, crumbOpen: null }; }); }
+  gotoNode(i, nodeKey) { this.setState(s => ({ scope: s.scope.slice(0, i), sel: nodeKey, crumbOpen: null })); }
+  switchInst(i, instKey) { this.setState(s => { const st = s.scope.slice(0, i + 1); st[i] = { ...st[i], instKey }; return { scope: st, sel: instKey, crumbOpen: null }; }); }
+  toggle(key) { this.setState(s => { const n = new Set(s.exp); n.has(key) ? n.delete(key) : n.add(key); return { exp: n }; }); }
+
+  caretStyle(show) { return { width: '18px', height: '18px', flexShrink: 0, display: 'grid', placeItems: 'center', borderRadius: '4px', cursor: 'pointer', visibility: show ? 'visible' : 'hidden' }; }
+  labelStyle(muted, fs) { return { flex: 1, minWidth: 0, fontSize: fs + 'px', fontWeight: 600, color: muted ? '#64748b' : '#1d232c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }; }
+  durStyle() { return { fontSize: '12px', color: '#8390a2', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }; }
+  crumbChip(last, clickable) { return { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px', borderRadius: '6px', fontSize: '12.5px', fontWeight: last ? 700 : 600, color: last ? '#003b77' : '#475263', background: last ? '#e6f0fb' : 'transparent', cursor: clickable ? 'pointer' : 'default' }; }
+  dropItem(active) { return { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '18px', padding: '7px 11px', borderRadius: '6px', cursor: 'pointer', fontSize: '12.5px', fontWeight: active ? 700 : 500, color: active ? '#003b77' : '#1d232c', background: active ? '#e6f0fb' : 'transparent' }; }
+
+  scopeRow(node, depth, struct, open, isTool, ctx) {
+    const compact = this.props.density === 'compact';
+    const fs = compact ? 12.5 : 13, mh = compact ? 28 : 33, isz = compact ? 15 : 16;
+    const t = this.TYPE[node.type] || this.TYPE.script;
+    const sel = ctx.sel === node.key;
+    let box = 'none';
+    if (isTool) box = sel ? 'inset 2px 0 0 #006bd8, inset 0 0 0 1px #b0d1f3' : 'inset 0 0 0 1px #e3e8ed';
+    else if (sel) box = 'inset 2px 0 0 #006bd8';
+    return {
+      key: node.key, isTool, drillHint: isTool, indent: depth * 18, sel,
+      rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', minHeight: mh + 'px', padding: '3px 8px', borderRadius: '7px', cursor: 'pointer', background: sel ? '#e6f0fb' : (isTool ? '#fbfdff' : 'transparent'), boxShadow: box },
+      caretStyle: this.caretStyle(struct), caretIcon: open ? 'ph-caret-down' : 'ph-caret-right',
+      icon: t.icon, iconStyle: { fontSize: isz + 'px', color: isTool ? '#006bd8' : t.color, flexShrink: 0 },
+      label: node.name, labelStyle: this.labelStyle(node.type === 'path' || node.type === 'end', fs),
+      instBadge: isTool ? this.instLabel(node) : null, durText: this.fmt(node.duration), durStyle: this.durStyle(),
+      onSelect: isTool ? () => this.drill(node.key) : () => this.setState({ sel: node.key }),
+      onToggle: (e) => { if (e) e.stopPropagation(); this.toggle(node.key); },
+    };
+  }
+  flattenScope(list, depth, out, ctx) {
+    (list || []).forEach(node => {
+      const isTool = node.instances && node.instances.length > 0;
+      const struct = !isTool && node.children && node.children.length > 0;
+      const open = this.state.exp.has(node.key);
+      out.push(this.scopeRow(node, depth, struct, open, isTool, ctx));
+      if (open && struct) this.flattenScope(node.children, depth + 1, out, ctx);
+    });
+  }
+
+  crumbs() {
+    const segs = this.state.scope, out = [];
+    segs.forEach((seg, i) => {
+      const last = i === segs.length - 1;
+      if (seg.root) { out.push({ isRoot: true, sepCaret: false, sepTool: false, icon: 'ph-flow-arrow', iconStyle: { fontSize: '13px', color: '#1d232c' }, label: 'extLawParalel2', onGoto: () => this.gotoSeg(0), chipStyle: this.crumbChip(last, segs.length > 1), clickable: segs.length > 1, hasSwitcher: false, options: [] }); return; }
+      const tool = this.index[seg.nodeKey], insts = tool.instances, cur = insts.findIndex(x => x.key === seg.instKey), isAgent = tool.type === 'agent';
+      out.push({
+        isRoot: false, sepCaret: true, sepTool: true,
+        byName: tool.name,
+        byIcon: isAgent ? 'ph-robot' : 'ph-tree-structure',
+        byIconStyle: { fontSize: '13px', color: isAgent ? '#f2a56b' : '#7fb3ec' },
+        onGotoBy: (e) => { if (e) e.stopPropagation(); this.gotoNode(i, seg.nodeKey); },
+        icon: 'ph-cube', iconStyle: { fontSize: '12px', color: '#006bd8' },
+        label: insts[cur].workflowName.replace(/^\[test\]/, '') + ' · Instance ' + (cur + 1),
+        hasSwitcher: insts.length > 1, dropOpen: this.state.crumbOpen === i,
+        onGoto: () => this.gotoSeg(i), clickable: true,
+        onToggleDrop: (e) => { if (e) e.stopPropagation(); this.setState(st => ({ crumbOpen: st.crumbOpen === i ? null : i })); },
+        options: insts.map((inst, idx) => ({ label: 'Instance ' + (idx + 1), meta: this.fmt(inst.duration), style: this.dropItem(idx === cur), onPick: (e) => { if (e) e.stopPropagation(); this.switchInst(i, inst.key); } })),
+        chipStyle: this.crumbChip(last, true),
+      });
+    });
+    return out;
+  }
+
+  summary() {
+    const c = this.containerFor(this.state.scope);
+    if (c.rowType === 'instance') {
+      return {
+        icon: 'ph-cube', iconStyle: { fontSize: '18px', color: '#006bd8' }, iconWrapStyle: { width: '34px', height: '34px', borderRadius: '8px', background: '#e6f0fb', display: 'grid', placeItems: 'center', flexShrink: 0 },
+        title: c.workflowName, subline: c.instanceId, durText: this.fmt(c.duration), count: c.nodes.length + ' nodes',
+      };
+    }
+    return { icon: 'ph-flow-arrow', iconStyle: { fontSize: '18px', color: '#1d232c' }, iconWrapStyle: { width: '34px', height: '34px', borderRadius: '8px', background: '#f7f8f9', display: 'grid', placeItems: 'center', flexShrink: 0 }, title: c.name, subline: c.instanceUuid || 'Root workflow', durText: this.fmt(c.duration), count: c.children.length + ' nodes' };
+  }
+
+  buildDetail(key) {
+    const n = this.index[key];
+    if (!n) return { empty: true, title: 'Select a node', metaRows: [], logs: [] };
+    if (n.rowType === 'instance') {
+      const p = n._parent, isAgent = p && p.type === 'agent';
+      const rows = [{ k: 'Subworkflow', v: n.workflowName, mono: false }, { k: 'Instance ID', v: n.instanceId, mono: true }, { k: 'Type', v: n.invocationType, mono: false }, { k: 'Triggered from', v: n.triggeredFrom, mono: false }];
+      if (p) rows.push({ k: 'Called as tool by', v: p.name + '  ·  ' + this.typeLabel(p.type), mono: false });
+      return { empty: false, kind: isAgent ? 'Workflow instance · agent tool call' : 'Workflow instance', title: n.workflowName, statusLabel: 'FINISHED', statusColor: '#007457', statusBg: '#e6f2ef', durText: this.fmt(n.duration), metaRows: rows, logs: this.synthLogs(n.nodes, n.workflowName) };
+    }
+    const rows = [{ k: 'Node type', v: this.typeLabel(n.type), mono: false }, { k: 'Duration', v: this.fmt(n.duration), mono: true }, { k: 'Status', v: 'Finished', mono: false }];
+    if (n.cond) {
+      rows.push({ k: 'Branch taken', v: n.cond.type === 'ELSE' ? 'ELSE (default)' : 'IF', mono: false });
+      if (n.cond.expr) rows.push({ k: 'Expression', v: n.cond.expr, mono: true });
+    }
+    if (n.dsInfo) {
+      const d = n.dsInfo;
+      rows.push({ k: 'Operation', v: d.operation + ' · NoSQL', mono: false });
+      rows.push({ k: 'Collection', v: d.collection, mono: true });
+      rows.push({ k: 'Filter', v: d.filter, mono: true });
+      if (d.payload) rows.push({ k: 'Payload', v: d.payload, mono: true });
+      rows.push({ k: 'Response', v: d.status + ' · ' + d.responseTime + ' ms · ' + d.responseSize + ' bytes', mono: false });
+    }
+    if (n.type === 'root' && n.instanceUuid) rows.push({ k: 'Instance ID', v: n.instanceUuid, mono: true });
+    if (n.type === 'subworkflow' && n.instanceUuid) {
+      rows.push({ k: 'Instance ID', v: n.instanceUuid, mono: true });
+      rows.push({ k: 'Definition ID', v: n.defId, mono: true });
+      rows.push({ k: 'Nested trace', v: 'Not captured in this run', mono: false });
+    }
+    if (n.instances && n.instances.length) rows.push({ k: n.instances.length > 1 ? 'Spawned instances' : 'Executes', v: (n.instances.length > 1 ? n.instances.length + ' × ' : '') + n.instances[0].workflowName, mono: false });
+    return { empty: false, kind: this.typeLabel(n.type), title: n.name, statusLabel: 'FINISHED', statusColor: '#007457', statusBg: '#e6f2ef', durText: this.fmt(n.duration), metaRows: rows, logs: this.nodeLogs(n) };
+  }
+  synthLogs(nodes, wf) {
+    const out = [{ text: 'Subworkflow: ' + wf, kind: 'plain' }];
+    nodes.slice(0, 6).forEach(n => { out.push({ text: '-- Running node: ' + n.name + ' --', kind: 'plain' }); out.push({ text: '-- Successfully finished running node: ' + n.name + ' --', kind: 'ok' }); });
+    return out.map((l, i) => ({ ...l, ts: '09 Jul 2026, 07:14:' + (54 + i).toString().padStart(2, '0') + '.' + (100 + i * 37 % 900) + ' AM' }));
+  }
+  nodeLogs(n) {
+    const base = '09 Jul 2026, 07:14:54.';
+    let out;
+    if (n.cond) out = [{ text: 'Evaluating node: ' + n.name, kind: 'plain' }, { text: n.cond.expr ? 'Condition: ' + n.cond.expr : 'No matching condition — default branch', kind: 'plain' }, { text: 'Branch taken: ' + (n.cond.type === 'ELSE' ? 'ELSE (default)' : 'IF'), kind: 'ok' }];
+    else if (n.dsInfo) out = [{ text: n.dsInfo.operation + ' · ' + n.dsInfo.opName, kind: 'plain' }, { text: 'Filter: ' + n.dsInfo.filter, kind: 'plain' }, { text: 'Success · ' + n.dsInfo.responseTime + ' ms · ' + n.dsInfo.responseSize + ' bytes', kind: 'ok' }];
+    else if (n.type === 'subworkflow' && n.instanceUuid) out = [{ text: '-- Running node: ' + n.name + ' --', kind: 'plain' }, { text: 'Invoked subworkflow instance ' + n.instanceUuid, kind: 'plain' }, { text: '-- Successfully finished running node: ' + n.name + ' --', kind: 'ok' }];
+    else out = [{ text: '-- Running node: ' + n.name + ' --', kind: 'plain' }, { text: '-- Successfully finished running node: ' + n.name + ' --', kind: 'ok' }];
+    return out.map((l, i) => ({ ...l, ts: base + (100 + i * 19).toString() + ' AM' }));
+  }
+
+  componentDidMount() { this._closer = (e) => { if (!e.target.closest || !e.target.closest('.fx-drop')) { if (this.state.crumbOpen !== null) this.setState({ crumbOpen: null }); } }; document.addEventListener('mousedown', this._closer); }
+  componentWillUnmount() { if (this._closer) document.removeEventListener('mousedown', this._closer); }
+
+  render() {
+    const rows = [];
+    this.flattenScope(this.listFor(this.state.scope), 0, rows, { sel: this.state.sel });
+    const crumbs = this.crumbs();
+    const summary = this.summary();
+    const detail = this.buildDetail(this.state.sel);
+    const canUp = this.state.scope.length > 1;
+    const showSummary = this.props.showSummaryBar !== false;
+
+    return (
+      <div style={css('min-height:100vh; padding:48px; display:flex; align-items:center; justify-content:center;')}>
+        <div style={css('width:1180px; height:800px; background:#fff; border:1px solid #cbd1db; border-radius:16px; box-shadow:0 24px 64px rgba(22,52,98,0.22); display:flex; flex-direction:column; overflow:hidden;')}>
+
+          {/* header */}
+          <div style={css('padding:22px 24px 16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #e3e8ed;')}>
+            <div style={css('flex:1; display:flex; align-items:center; gap:12px;')}>
+              <div style={css('font-size:21px; font-weight:800; letter-spacing:-0.01em;')}>extLawParalel2</div>
+              <div style={css('display:inline-flex; align-items:center; gap:6px; background:#e6f2ef; color:#007457; font-size:11px; font-weight:700; letter-spacing:0.06em; padding:4px 10px; border-radius:120px;')}><i className="ph ph-check-circle" style={{ fontSize: '13px' }}></i>FINISHED</div>
+            </div>
+            <div className="h-f7" style={css('width:34px; height:34px; border-radius:8px; display:grid; place-items:center; color:#64748b; cursor:pointer;')}><i className="ph ph-x" style={{ fontSize: '18px' }}></i></div>
+          </div>
+
+          {/* breadcrumb */}
+          <div style={css('padding:10px 24px; background:#f7f8f9; border-bottom:1px solid #e3e8ed; display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-height:46px;')}>
+            <i className="ph ph-map-pin-simple-area" style={css('font-size:15px; color:#64748b; margin-right:4px; flex-shrink:0;')}></i>
+            {crumbs.map((c, i) => (
+              <React.Fragment key={i}>
+                {c.sepCaret && <i className="ph ph-caret-right" style={css('font-size:11px; color:#a6b0be; margin:0 2px;')}></i>}
+                {c.sepTool && (
+                  <span className="fx-tip-wrap" style={css('position:relative; display:inline-flex; align-items:center; margin:0 3px;')}>
+                    <span className="h-d6" onClick={c.onGotoBy} style={css('width:22px; height:22px; border-radius:6px; display:grid; place-items:center; background:#e6f0fb; cursor:pointer;')}><i className="ph ph-plugs-connected" style={css('font-size:13px; color:#005fc0;')}></i></span>
+                    <span className="fx-tip" style={css('position:absolute; top:100%; left:50%; margin-top:8px; display:flex; align-items:center; gap:6px; padding:8px 12px; background:#1d232c; color:#e3e8ed; border-radius:8px; font-size:11.5px; white-space:nowrap; box-shadow:0 8px 16px rgba(22,52,98,0.18); z-index:40;')}>Called as a tool by<i className={'ph ' + c.byIcon} style={c.byIconStyle}></i><b style={css('font-weight:700; color:#fff;')}>{c.byName}</b></span>
+                  </span>
+                )}
+                <div style={css('position:relative; display:inline-flex; align-items:center;')}>
+                  <div className={c.clickable ? 'h-e6' : undefined} onClick={c.onGoto} style={c.chipStyle}>
+                    <i className={'ph ' + c.icon} style={c.iconStyle}></i>
+                    <span>{c.label}</span>
+                    {c.tag && <span style={c.tagStyle}>{c.tag}</span>}
+                    {c.hasSwitcher && <i className="ph ph-caret-down fx-drop" onClick={c.onToggleDrop} style={css('font-size:11px; margin-left:2px; color:#64748b; cursor:pointer;')}></i>}
+                  </div>
+                  {c.dropOpen && (
+                    <div className="fx-drop" style={css('position:absolute; top:100%; left:0; margin-top:6px; background:#fff; border:1px solid #cbd1db; border-radius:10px; box-shadow:0 8px 16px rgba(22,52,98,0.14); padding:5px; min-width:210px; z-index:30;')}>
+                      <div style={css('font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#a6b0be; padding:5px 10px 6px;')}>Switch instance</div>
+                      {c.options.map((o, j) => (
+                        <div key={j} className="h-f7" onClick={o.onPick} style={o.style}>
+                          <span style={css('display:inline-flex; align-items:center; gap:6px;')}><i className="ph ph-cube" style={css('font-size:13px; color:#006bd8;')}></i>{o.label}</span>
+                          <span style={css('font-size:11px; color:#8390a2; font-variant-numeric:tabular-nums;')}>{o.meta}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+
+          {/* scope summary */}
+          {showSummary && (
+            <div style={css('padding:13px 24px; border-bottom:1px solid #e3e8ed; display:flex; flex-direction:column; gap:10px;')}>
+              <div style={css('display:flex; align-items:center; gap:14px; flex-wrap:wrap;')}>
+                <div style={summary.iconWrapStyle}><i className={'ph ' + summary.icon} style={summary.iconStyle}></i></div>
+                <div style={css('min-width:0;')}>
+                  <div style={css('display:flex; align-items:center; gap:8px;')}><span style={css('font-size:15px; font-weight:700;')}>{summary.title}</span><span style={css('font-size:9.5px; font-weight:700; letter-spacing:0.06em; color:#007457; background:#e6f2ef; padding:2px 7px; border-radius:120px;')}>FINISHED</span></div>
+                  <div style={css('font-size:11.5px; color:#64748b; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; margin-top:2px;')}>{summary.subline}</div>
+                </div>
+                <div style={css('display:flex; gap:24px; margin-left:auto; padding-right:4px;')}>
+                  <div><div style={css('font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#a6b0be;')}>Duration</div><div style={css('font-size:13px; font-weight:600; font-variant-numeric:tabular-nums;')}>{summary.durText}</div></div>
+                  <div><div style={css('font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#a6b0be;')}>Nodes</div><div style={css('font-size:13px; font-weight:600;')}>{summary.count}</div></div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* body */}
+          <div style={css('flex:1; display:flex; min-height:0;')}>
+            <div style={css('width:440px; flex-shrink:0; border-right:1px solid #e3e8ed; display:flex; flex-direction:column; min-height:0;')}>
+              <div style={css('padding:12px 16px 8px; display:flex; align-items:center; justify-content:space-between;')}>
+                <div style={css('font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#64748b;')}>Nodes in this scope</div>
+                {canUp && (
+                  <button className="h-f7" onClick={() => this.gotoSeg(this.state.scope.length - 2)} style={css('display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 9px; border:1px solid #cbd1db; background:#fff; border-radius:6px; font:inherit; font-size:11.5px; font-weight:600; color:#475263; cursor:pointer;')}><i className="ph ph-arrow-u-up-left" style={{ fontSize: '13px' }}></i>Up</button>
+                )}
+              </div>
+              <div className="trk" style={css('flex:1; overflow-y:auto; padding:2px 8px 20px; min-height:0;')}>
+                {rows.map((r) => (
+                  <div key={r.key} className={r.sel ? undefined : 'h-f7'} onClick={r.onSelect} style={r.rowStyle}>
+                    <div style={{ width: r.indent + 'px', flexShrink: 0 }}></div>
+                    <div onClick={r.onToggle} style={r.caretStyle}><i className={'ph ' + r.caretIcon} style={{ fontSize: '13px', color: '#8390a2' }}></i></div>
+                    <i className={'ph ' + r.icon} style={r.iconStyle}></i>
+                    <span style={r.labelStyle}>{r.label}</span>
+                    {r.instBadge && <span style={css('display:inline-flex; align-items:center; gap:4px; background:#fff0e8; color:#b44c14; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:120px; border:1px solid #fed1b9;')}><i className="ph ph-stack" style={{ fontSize: '11px' }}></i>{r.instBadge}</span>}
+                    <span style={r.durStyle}>{r.durText}</span>
+                    {r.drillHint && <i className="ph ph-arrow-right" style={css('font-size:14px; color:#006bd8; flex-shrink:0;')}></i>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={css('flex:1; display:flex; flex-direction:column; min-width:0;')}>
+              <div style={css('display:flex; gap:24px; padding:0 24px; border-bottom:1px solid #e3e8ed;')}>
+                <div style={css('padding:14px 2px; font-size:14px; font-weight:700; color:#006bd8; border-bottom:2px solid #006bd8; margin-bottom:-1px;')}>Logs</div>
+                <div style={css('padding:14px 2px; font-size:14px; color:#64748b; cursor:pointer;')}>Input</div>
+                <div style={css('padding:14px 2px; font-size:14px; color:#64748b; cursor:pointer;')}>Output</div>
+              </div>
+              <div className="trk" style={css('flex:1; overflow-y:auto; padding:20px 24px; min-height:0;')}>
+                <TraceDetail detail={detail} />
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <TraceExplorer density="comfortable" showSummaryBar={true} />
+);
+</script>
+</body>
+</html>
