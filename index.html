@@ -347,7 +347,7 @@ class TraceExplorer extends React.Component {
   toggle(key) { this.setState(s => { const n = new Set(s.exp); n.has(key) ? n.delete(key) : n.add(key); return { exp: n }; }); }
 
   caretStyle(show) { return { width: '18px', height: '18px', flexShrink: 0, display: 'grid', placeItems: 'center', borderRadius: '4px', cursor: 'pointer', visibility: show ? 'visible' : 'hidden' }; }
-  labelStyle(muted, fs) { return { flex: 1, minWidth: 0, fontSize: fs + 'px', fontWeight: 600, color: muted ? '#64748b' : '#1d232c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }; }
+  labelStyle(muted, fs, ok) { const color = ok ? (muted ? '#5a9e88' : '#007457') : (muted ? '#64748b' : '#1d232c'); return { flex: 1, minWidth: 0, fontSize: fs + 'px', fontWeight: 600, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }; }
   durStyle() { return { fontSize: '12px', color: '#8390a2', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }; }
   crumbChip(last, clickable) { return { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px', borderRadius: '6px', fontSize: '12.5px', fontWeight: last ? 700 : 600, color: last ? '#003b77' : '#475263', background: last ? '#e6f0fb' : 'transparent', cursor: clickable ? 'pointer' : 'default' }; }
   dropItem(active) { return { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '18px', padding: '7px 11px', borderRadius: '6px', cursor: 'pointer', fontSize: '12.5px', fontWeight: active ? 700 : 500, color: active ? '#003b77' : '#1d232c', background: active ? '#e6f0fb' : 'transparent' }; }
@@ -356,6 +356,9 @@ class TraceExplorer extends React.Component {
     const compact = this.props.density === 'compact';
     const fs = compact ? 12.5 : 13, mh = compact ? 28 : 33, isz = compact ? 15 : 16;
     const t = this.TYPE[node.type] || this.TYPE.script;
+    // Every node in this trace finished successfully, so color it with the
+    // "finished" green; fall back to the type/tool color otherwise.
+    const iconColor = node.status === 'finished' ? '#007457' : (isTool ? '#006bd8' : t.color);
     const sel = ctx.sel === node.key;
     let box = 'none';
     if (isTool) box = sel ? 'inset 2px 0 0 #006bd8, inset 0 0 0 1px #b0d1f3' : 'inset 0 0 0 1px #e3e8ed';
@@ -364,8 +367,8 @@ class TraceExplorer extends React.Component {
       key: node.key, isTool, drillHint: isTool, indent: depth * 18, sel,
       rowStyle: { display: 'flex', alignItems: 'center', gap: '8px', minHeight: mh + 'px', padding: '3px 8px', borderRadius: '7px', cursor: 'pointer', background: sel ? '#e6f0fb' : (isTool ? '#fbfdff' : 'transparent'), boxShadow: box },
       caretStyle: this.caretStyle(struct), caretIcon: open ? 'ph-caret-down' : 'ph-caret-right',
-      icon: t.icon, iconStyle: { fontSize: isz + 'px', color: isTool ? '#006bd8' : t.color, flexShrink: 0 },
-      label: node.name, labelStyle: this.labelStyle(node.type === 'path' || node.type === 'end', fs),
+      icon: t.icon, iconStyle: { fontSize: isz + 'px', color: iconColor, flexShrink: 0 },
+      label: node.name, labelStyle: this.labelStyle(node.type === 'path' || node.type === 'end', fs, node.status === 'finished'),
       instBadge: isTool ? this.instLabel(node) : null, durText: this.fmt(node.duration), durStyle: this.durStyle(),
       onSelect: isTool ? () => this.drill(node.key) : () => this.setState({ sel: node.key }),
       onToggle: (e) => { if (e) e.stopPropagation(); this.toggle(node.key); },
@@ -497,7 +500,6 @@ class TraceExplorer extends React.Component {
 
           {/* breadcrumb */}
           <div style={css('padding:10px 24px; background:#f7f8f9; border-bottom:1px solid #e3e8ed; display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-height:46px;')}>
-            <i className="ph ph-map-pin-simple-area" style={css('font-size:15px; color:#64748b; margin-right:4px; flex-shrink:0;')}></i>
             {crumbs.map((c, i) => (
               <React.Fragment key={i}>
                 {c.sepCaret && <i className="ph ph-caret-right" style={css('font-size:11px; color:#a6b0be; margin:0 2px;')}></i>}
@@ -559,7 +561,7 @@ class TraceExplorer extends React.Component {
                     <div onClick={r.onToggle} style={r.caretStyle}><i className={'ph ' + r.caretIcon} style={{ fontSize: '13px', color: '#8390a2' }}></i></div>
                     <i className={'ph ' + r.icon} style={r.iconStyle}></i>
                     <span style={r.labelStyle}>{r.label}</span>
-                    {r.instBadge && <span style={css('display:inline-flex; align-items:center; gap:4px; background:#fff0e8; color:#b44c14; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:120px; border:1px solid #fed1b9;')}><i className="ph ph-stack" style={{ fontSize: '11px' }}></i>{r.instBadge}</span>}
+                    {r.instBadge && <span style={css('display:inline-flex; align-items:center; gap:4px; background:#eef1f5; color:#475263; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:120px; border:1px solid #d7dde5;')}><i className="ph ph-stack" style={{ fontSize: '11px' }}></i>{r.instBadge}</span>}
                     <span style={r.durStyle}>{r.durText}</span>
                     {r.drillHint && <i className="ph ph-arrow-right" style={css('font-size:14px; color:#006bd8; flex-shrink:0;')}></i>}
                   </div>
