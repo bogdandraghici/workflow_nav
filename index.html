@@ -109,6 +109,26 @@ const SUBFLOW_TEMPLATES = [
   ] },
 ];
 
+/* ---- Custom Agent tool workflows ----
+   The agent invokes these two workflows as tools (extExtractEntities twice).
+   Same template mechanism as the child subworkflows above. */
+const AGENT_TOOL_TEMPLATES = {
+  classify: { wf: 'extClassifyDocument', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'load document text', t: 'ds', w: 2, op: 'FIND', filter: '{"$and": [{"_id": "%DOC%"}]}' },
+    { n: 'classify law domain', t: 'script', w: 7 },
+    { n: 'write classification', t: 'ds', w: 4, op: 'UPDATE', payload: '{"$set": {"domain": "…"}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+  extract: { wf: 'extExtractEntities', nodes: [
+    { n: 'Start', t: 'start', w: 0 },
+    { n: 'load document text', t: 'ds', w: 2, op: 'FIND', filter: '{"$and": [{"_id": "%DOC%"}]}' },
+    { n: 'extract entities', t: 'script', w: 8 },
+    { n: 'store entities', t: 'ds', w: 4, op: 'UPDATE', payload: '{"$set": {"entities": ["…"]}}' },
+    { n: 'End Flow 001', t: 'end', w: 1 },
+  ] },
+};
+
 /* ============================ TraceDetail ============================ */
 /* Faithful port of TraceDetail.dc.html renderVals + template. */
 function TraceDetail({ detail }) {
@@ -187,13 +207,14 @@ class TraceExplorer extends React.Component {
       parallel:    { icon: 'ph-arrows-split',           color: '#006bd8' },
       path:        { icon: 'ph-arrow-elbow-down-right', color: '#8390a2' },
       subworkflow: { icon: 'ph-tree-structure',         color: '#006bd8' },
+      agent:       { icon: 'ph-robot',                  color: '#d97706' },
     };
     this._seq = 0;
     this._irand = 0;
     this.root = this.build();
     this.index = {};
     this.indexAll(this.root, null);
-    this.state = { scope: [{ root: true }], exp: new Set(), sel: 'root', crumbOpen: null };
+    this.state = { scope: [{ root: true }], exp: new Set(this._agentKey ? [this._agentKey] : []), sel: 'root', crumbOpen: null };
   }
 
   // ---------- data ----------
@@ -271,12 +292,29 @@ class TraceExplorer extends React.Component {
       this.loopFork('loop in names odd', 52, false),
     ] };
     const parallel = { key: this.uid('n'), type: 'parallel', name: 'Start Parallel 001', duration: 860683, status: 'finished', instances: [], children: [evenPath, oddPath] };
+
+    // Custom Agent (root level, after "prepare name"): calls two workflows as tools.
+    // extExtractEntities is called twice, so its tool node carries two instances.
+    // calledAsToolBy marks these as genuine agent tool calls — that is what drives the
+    // "called as a tool by" breadcrumb marker; regular subworkflow nodes have no marker.
+    const AGENT_CALLER = { name: 'Custom Agent', isAgent: true };
+    const classifyInst = this.fictInstance(AGENT_TOOL_TEMPLATES.classify, 2431, 'a1d7f0c2-3b9e-4c81-9f2a-6d4e51c8b7a0', 'e4b7a9d1-2c66-4f03-8a1b-9d5e2f7c0a34', EVEN1.docId);
+    const extractInst1 = this.fictInstance(AGENT_TOOL_TEMPLATES.extract, 3187, 'b2e8a1d3-4c0f-4d92-a0b3-7e5f62d9c8b1', 'f5c8b0e2-3d77-4a14-9b2c-0e6f3a8d1b45', EVEN1.docId);
+    const extractInst2 = this.fictInstance(AGENT_TOOL_TEMPLATES.extract, 2698, 'c3f9b2e4-5d10-4e03-b1c4-8f6a73e0d9c2', 'f5c8b0e2-3d77-4a14-9b2c-0e6f3a8d1b45', EVEN2.docId);
+    const toolClassify = { key: this.uid('n'), type: 'subworkflow', name: 'classify document', duration: 2431, status: 'finished', children: [], instances: [classifyInst], calledAsToolBy: AGENT_CALLER };
+    const toolExtract = { key: this.uid('n'), type: 'subworkflow', name: 'extract entities', duration: 5885, status: 'finished', children: [], instances: [extractInst1, extractInst2], calledAsToolBy: AGENT_CALLER };
+    // The agent's tool calls are nested under it as children (expandable inline) rather
+    // than being reached by drilling into the agent. Each tool node stays drillable.
+    const customAgent = { key: this.uid('n'), type: 'agent', name: 'Custom Agent', duration: 8734, status: 'finished', children: [toolClassify, toolExtract], instances: [] };
+    this._agentKey = customAgent.key;
+
     return { key: 'root', type: 'root', name: 'extLawParalel2', status: 'finished', duration: 861128, instanceUuid: 'c42b9208-1db4-4ff9-989c-958ab600507b', instances: [], children: [
       this.leaf('start', 'Start', 0),
       this.fork('Condition 002', 37, { type: 'ELSE' }),
       this.ds('Database Operation 001', 18, { operation: 'FIND', collection: COLL, opName: 'find all not processed without site', filter: '{"$and": [{"processingStatus": {"$ne": "yes"}}]}', limit: 100, responseTime: 5, responseSize: 27877, status: 'SUCCESS' }),
       this.fork('Condition 001', 63, { type: 'IF', expr: 'len(input["documentsToProcessing"]["data"]) > 0' }),
       this.leaf('script', 'prepare name', 127),
+      customAgent,
       this.leaf('script', 'test input', 60),
       parallel,
       this.leaf('end', 'End Parallel 001', 0),
@@ -297,7 +335,7 @@ class TraceExplorer extends React.Component {
     return m + 'm ' + String(r).padStart(2, '0') + 's';
   }
   instLabel(node) { const c = node.instances ? node.instances.length : 0; return c > 1 ? (c + ' instances') : null; }
-  typeLabel(t) { return { root: 'Workflow', script: 'Script node', datasource: 'Database operation', fork: 'Condition node', start: 'Start node', end: 'End node', parallel: 'Parallel gateway', path: 'Parallel path', subworkflow: 'Subworkflow node' }[t] || 'Node'; }
+  typeLabel(t) { return { root: 'Workflow', script: 'Script node', datasource: 'Database operation', fork: 'Condition node', start: 'Start node', end: 'End node', parallel: 'Parallel gateway', path: 'Parallel path', subworkflow: 'Subworkflow node', agent: 'Custom Agent' }[t] || 'Node'; }
 
   // ---------- navigation ----------
   listFor(stack) { const seg = stack[stack.length - 1]; return seg.root ? this.root.children : this.index[seg.instKey].nodes; }
@@ -348,14 +386,18 @@ class TraceExplorer extends React.Component {
     segs.forEach((seg, i) => {
       const last = i === segs.length - 1;
       if (seg.root) { out.push({ isRoot: true, sepCaret: false, sepTool: false, icon: 'ph-flow-arrow', iconStyle: { fontSize: '13px', color: '#1d232c' }, label: 'extLawParalel2', onGoto: () => this.gotoSeg(0), chipStyle: this.crumbChip(last, segs.length > 1), clickable: segs.length > 1, hasSwitcher: false, options: [] }); return; }
-      const tool = this.index[seg.nodeKey], insts = tool.instances, cur = insts.findIndex(x => x.key === seg.instKey), isAgent = tool.type === 'agent';
+      const tool = this.index[seg.nodeKey], insts = tool.instances, cur = insts.findIndex(x => x.key === seg.instKey);
+      const isAgentNode = tool.type === 'agent';
+      // The "called as a tool by" marker only appears for genuine agent tool calls
+      // (nodes carrying calledAsToolBy) — not for ordinary subworkflow drill-downs.
+      const caller = tool.calledAsToolBy;
       out.push({
-        isRoot: false, sepCaret: true, sepTool: true,
-        byName: tool.name,
-        byIcon: isAgent ? 'ph-robot' : 'ph-tree-structure',
-        byIconStyle: { fontSize: '13px', color: isAgent ? '#f2a56b' : '#7fb3ec' },
+        isRoot: false, sepCaret: true, sepTool: !!caller,
+        byName: caller ? caller.name : '',
+        byIcon: caller && caller.isAgent ? 'ph-robot' : 'ph-tree-structure',
+        byIconStyle: { fontSize: '13px', color: caller && caller.isAgent ? '#f2a56b' : '#7fb3ec' },
         onGotoBy: (e) => { if (e) e.stopPropagation(); this.gotoNode(i, seg.nodeKey); },
-        icon: 'ph-cube', iconStyle: { fontSize: '12px', color: '#006bd8' },
+        icon: isAgentNode ? 'ph-robot' : 'ph-cube', iconStyle: { fontSize: '12px', color: isAgentNode ? '#d97706' : '#006bd8' },
         label: insts[cur].workflowName.replace(/^\[test\]/, '') + ' · Instance ' + (cur + 1),
         hasSwitcher: insts.length > 1, dropOpen: this.state.crumbOpen === i,
         onGoto: () => this.gotoSeg(i), clickable: true,
@@ -382,11 +424,12 @@ class TraceExplorer extends React.Component {
     const n = this.index[key];
     if (!n) return { empty: true, title: 'Select a node', metaRows: [], logs: [] };
     if (n.rowType === 'instance') {
-      const p = n._parent, isAgent = p && p.type === 'agent';
+      const p = n._parent, caller = p && p.calledAsToolBy, isAgentToolCall = !!(caller && caller.isAgent);
       const rows = [{ k: 'Subworkflow', v: n.workflowName, mono: false }, { k: 'Instance ID', v: n.instanceId, mono: true }, { k: 'Type', v: n.invocationType, mono: false }, { k: 'Triggered from', v: n.triggeredFrom, mono: false }];
       if (n.resourceId) rows.splice(2, 0, { k: 'Resource ID', v: n.resourceId, mono: true });
-      if (p) rows.push({ k: 'Called as tool by', v: p.name + '  ·  ' + this.typeLabel(p.type), mono: false });
-      return { empty: false, kind: isAgent ? 'Workflow instance · agent tool call' : 'Workflow instance', title: n.workflowName, statusLabel: 'FINISHED', statusColor: '#007457', statusBg: '#e6f2ef', durText: this.fmt(n.duration), metaRows: rows, logs: this.synthLogs(n.nodes, n.workflowName) };
+      if (caller) rows.push({ k: 'Called as a tool by', v: caller.name, mono: false });
+      else if (p && p.type !== 'agent') rows.push({ k: 'Invoked by', v: p.name + '  ·  ' + this.typeLabel(p.type), mono: false });
+      return { empty: false, kind: isAgentToolCall ? 'Workflow instance · agent tool call' : 'Workflow instance', title: n.workflowName, statusLabel: 'FINISHED', statusColor: '#007457', statusBg: '#e6f2ef', durText: this.fmt(n.duration), metaRows: rows, logs: this.synthLogs(n.nodes, n.workflowName) };
     }
     const rows = [{ k: 'Node type', v: this.typeLabel(n.type), mono: false }, { k: 'Duration', v: this.fmt(n.duration), mono: true }, { k: 'Status', v: 'Finished', mono: false }];
     if (n.cond) {
@@ -407,6 +450,7 @@ class TraceExplorer extends React.Component {
       rows.push({ k: 'Resource ID', v: n.resourceId, mono: true });
       rows.push({ k: 'Nested trace', v: 'Not captured in this run', mono: false });
     }
+    if (n.type === 'agent' && n.children && n.children.length) rows.push({ k: 'Tools', v: n.children.map(c => c.name).join(', '), mono: false });
     if (n.instances && n.instances.length) rows.push({ k: n.instances.length > 1 ? 'Spawned instances' : 'Executes', v: (n.instances.length > 1 ? n.instances.length + ' × ' : '') + n.instances[0].workflowName, mono: false });
     return { empty: false, kind: this.typeLabel(n.type), title: n.name, statusLabel: 'FINISHED', statusColor: '#007457', statusBg: '#e6f2ef', durText: this.fmt(n.duration), metaRows: rows, logs: this.nodeLogs(n) };
   }
