@@ -25,6 +25,9 @@
   .h-f7:hover { background: #f7f8f9 !important; }
   .h-e6:hover { background: #e6f0fb !important; }
   .h-d6:hover { background: #d6e4f5 !important; }
+  /* Flash pulse when a search result lands on its row after a multi-level jump. */
+  @keyframes fxflash { 0% { background: #ffe9a8 !important; } 65% { background: #ffe9a8 !important; } 100% { background: transparent; } }
+  .fx-flash { animation: fxflash 1.3s ease-out; }
 </style>
 </head>
 <body>
@@ -214,7 +217,15 @@ class TraceExplorer extends React.Component {
     this.root = this.build();
     this.index = {};
     this.indexAll(this.root, null);
-    this.state = { scope: [{ root: true }], exp: new Set(this._agentKey ? [this._agentKey] : []), sel: 'root', crumbOpen: null };
+    // Flat searchable list of every real node (skip pure instance rows and the root).
+    this.searchList = [];
+    Object.keys(this.index).forEach(k => {
+      const e = this.index[k];
+      if (e.rowType === 'instance' || e.type === 'root') return;
+      this.searchList.push({ key: e.key, name: e.name || '', type: e.type, wf: (e.instances || []).map(i => i.workflowName) });
+    });
+    this._rowRefs = {};
+    this.state = { scope: [{ root: true }], exp: new Set(this._agentKey ? [this._agentKey] : []), sel: 'root', crumbOpen: null, query: '', searchOpen: false, activeIndex: 0, flashKey: null };
   }
 
   // ---------- data ----------
@@ -322,6 +333,7 @@ class TraceExplorer extends React.Component {
     ] };
   }
   indexAll(node, parent) {
+    node._parent = parent;
     this.index[node.key] = node;
     (node.instances || []).forEach(i => { this.index[i.key] = i; i._parent = node; i.nodes.forEach(n => this.indexAll(n, i)); });
     (node.children || []).forEach(c => this.indexAll(c, node));
@@ -485,12 +497,132 @@ class TraceExplorer extends React.Component {
     return out.map((l, i) => ({ ...l, ts: base + (100 + i * 19).toString() + ' AM' }));
   }
 
-  componentDidMount() { this._closer = (e) => { if (!e.target.closest || !e.target.closest('.fx-drop')) { if (this.state.crumbOpen !== null) this.setState({ crumbOpen: null }); } }; document.addEventListener('mousedown', this._closer); }
-  componentWillUnmount() { if (this._closer) document.removeEventListener('mousedown', this._closer); }
+  componentDidMount() {
+    this._closer = (e) => {
+      const t = e.target;
+      if (!t.closest || !t.closest('.fx-drop')) { if (this.state.crumbOpen !== null) this.setState({ crumbOpen: null }); }
+      if (!t.closest || !t.closest('.fx-search')) { if (this.state.searchOpen) this.setState({ searchOpen: false }); }
+    };
+    // "/" focuses the search box (unless already typing in a field).
+    this._slash = (e) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = document.activeElement, tag = el && el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      if (this._searchRef) this._searchRef.focus();
+    };
+    document.addEventListener('mousedown', this._closer);
+    document.addEventListener('keydown', this._slash);
+  }
+  componentWillUnmount() {
+    if (this._closer) document.removeEventListener('mousedown', this._closer);
+    if (this._slash) document.removeEventListener('keydown', this._slash);
+    if (this._flashTimer) clearTimeout(this._flashTimer);
+  }
+
+  // ---------- search ----------
+  searchResults() {
+    const q = (this.state.query || '').trim().toLowerCase();
+    if (!q) return [];
+    const scored = [];
+    this.searchList.forEach(e => {
+      const name = e.name.toLowerCase();
+      let score = -1;
+      if (name === q) score = 0;
+      else if (name.startsWith(q)) score = 1;
+      else if (name.includes(q)) score = 2;
+      else if (e.wf.some(w => w.toLowerCase().includes(q))) score = 3;
+      if (score >= 0) scored.push({ key: e.key, name: e.name, type: e.type, score });
+    });
+    scored.sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+    return scored.slice(0, 60);
+  }
+  // Ancestor labels from root down to the node's immediate parent. A drilled
+  // subworkflow/tool is represented once (node name + ·#k when multi-instance);
+  // structural containers (parallel/path/agent) and the root keep their own labels.
+  buildTrail(key) {
+    const list = [];
+    let p = this.index[key];
+    while (p && p._parent) { list.unshift(p._parent); p = p._parent; }
+    const trail = [];
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (a.rowType === 'instance') {
+        const owner = a._parent, insts = owner.instances || [], idx = insts.findIndex(x => x.key === a.key);
+        const t = this.TYPE[owner.type] || this.TYPE.subworkflow;
+        trail.push({ icon: t.icon, color: t.color, label: owner.name + (insts.length > 1 ? ' · #' + (idx + 1) : '') });
+      } else if (a.type === 'root') {
+        trail.push({ icon: 'ph-flow-arrow', color: '#1d232c', label: a.name });
+      } else {
+        const next = list[i + 1];
+        if (next && next.rowType === 'instance' && next._parent === a) continue; // represented by its instance below
+        const t = this.TYPE[a.type] || this.TYPE.script;
+        trail.push({ icon: t.icon, color: t.color, label: a.name });
+      }
+    }
+    return trail;
+  }
+  // Reconstruct the drill path to a node: each (node-with-instances -> instance)
+  // pair on the chain becomes a scope segment; structural ancestors in the final
+  // level are expanded inline; the node is selected, scrolled to, and flashed.
+  navigateTo(targetKey) {
+    const chain = [];
+    let n = this.index[targetKey];
+    while (n) { chain.unshift(n); n = n._parent; }
+    const scope = [{ root: true }];
+    let lastInstIdx = 0;
+    for (let i = 1; i < chain.length; i++) {
+      if (chain[i].rowType === 'instance') { scope.push({ nodeKey: chain[i - 1].key, instKey: chain[i].key }); lastInstIdx = i; }
+    }
+    const exp = new Set(this.state.exp);
+    for (let i = lastInstIdx + 1; i < chain.length - 1; i++) {
+      const item = chain[i], isTool = item.instances && item.instances.length > 0;
+      if (!isTool && item.children && item.children.length > 0) exp.add(item.key);
+    }
+    this.setState({ scope, exp, sel: targetKey, flashKey: targetKey, searchOpen: false, query: '', activeIndex: 0 }, () => {
+      const el = this._rowRefs[targetKey];
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+    });
+    if (this._flashTimer) clearTimeout(this._flashTimer);
+    this._flashTimer = setTimeout(() => this.setState({ flashKey: null }), 1300);
+  }
+  onSearchKey(e) {
+    const res = this._lastResults || [];
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(s => ({ activeIndex: Math.min(s.activeIndex + 1, Math.max(res.length - 1, 0)), searchOpen: true })); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(s => ({ activeIndex: Math.max(s.activeIndex - 1, 0) })); }
+    else if (e.key === 'Enter') { e.preventDefault(); const r = res[this.state.activeIndex]; if (r) this.navigateTo(r.key); }
+    else if (e.key === 'Escape') { this.setState({ searchOpen: false, query: '' }); if (e.target.blur) e.target.blur(); }
+  }
+  highlight(name, q) {
+    if (!q) return name;
+    const i = name.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return name;
+    return [name.slice(0, i), <mark key="m" style={{ background: '#ffec9e', color: 'inherit', padding: 0, borderRadius: '2px' }}>{name.slice(i, i + q.length)}</mark>, name.slice(i + q.length)];
+  }
+  // Full trail, wrapping to a second line if needed. The distinguishing hops
+  // (e.g. Even/Odd names, process X law · #k) must stay visible, so we never
+  // drop whole segments — only over-long individual labels ellipsize.
+  renderTrail(trail) {
+    const chip = (seg, key, last) => (
+      <span key={key} style={css('display:inline-flex; align-items:center; gap:3px; min-width:0; max-width:200px;')}>
+        <i className={'ph ' + seg.icon} style={{ fontSize: '11px', color: seg.color, flexShrink: 0 }}></i>
+        <span style={{ fontSize: '11px', color: last ? '#475263' : '#64748b', fontWeight: last ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{seg.label}</span>
+      </span>
+    );
+    const sep = k => <i key={k} className="ph ph-caret-right" style={{ fontSize: '9px', color: '#c2cad4', flexShrink: 0 }}></i>;
+    const out = [];
+    trail.forEach((s, i) => { if (i) out.push(sep('s' + i)); out.push(chip(s, 'c' + i, i === trail.length - 1)); });
+    return out;
+  }
 
   render() {
+    this._rowRefs = {};
     const rows = [];
     this.flattenScope(this.listFor(this.state.scope), 0, rows, { sel: this.state.sel });
+    const q = (this.state.query || '').trim();
+    const results = q ? this.searchResults() : [];
+    this._lastResults = results;
+    const searchOpen = this.state.searchOpen && q.length > 0;
     const crumbs = this.crumbs();
     const summary = this.summary();
     const detail = this.buildDetail(this.state.sel);
@@ -567,13 +699,56 @@ class TraceExplorer extends React.Component {
           {/* body */}
           <div style={css('flex:1; display:flex; min-height:0;')}>
             <div style={css('width:440px; flex-shrink:0; border-right:1px solid #e3e8ed; display:flex; flex-direction:column; min-height:0;')}>
-              <div style={css('display:flex; align-items:center; justify-content:flex-end; gap:6px; padding:8px 12px 6px; border-bottom:1px solid #e3e8ed;')}>
+              {/* global node search */}
+              <div className="fx-search" style={css('position:relative; padding:10px 12px; border-bottom:1px solid #e3e8ed;')}>
+                <div style={css('display:flex; align-items:center; gap:8px; background:#f7f8f9; border:1px solid #e3e8ed; border-radius:8px; padding:7px 10px;')}>
+                  <i className="ph ph-magnifying-glass" style={css('font-size:15px; color:#8390a2; flex-shrink:0;')}></i>
+                  <input
+                    ref={el => { this._searchRef = el; }}
+                    value={this.state.query}
+                    onChange={e => this.setState({ query: e.target.value, searchOpen: true, activeIndex: 0 })}
+                    onFocus={() => { if (this.state.query) this.setState({ searchOpen: true }); }}
+                    onKeyDown={e => this.onSearchKey(e)}
+                    placeholder="Search nodes across all levels…"
+                    style={css('flex:1; min-width:0; border:none; outline:none; background:transparent; font-family:inherit; font-size:13px; color:#1d232c;')} />
+                  {this.state.query
+                    ? <i className="ph ph-x" onClick={() => { this.setState({ query: '', searchOpen: false }); if (this._searchRef) this._searchRef.focus(); }} style={css('font-size:14px; color:#8390a2; cursor:pointer; flex-shrink:0;')}></i>
+                    : <span style={css('font-size:11px; color:#a6b0be; border:1px solid #d7dde5; border-radius:4px; padding:0 5px; line-height:16px; flex-shrink:0;')}>/</span>}
+                </div>
+                {searchOpen && (
+                  <div className="trk" style={css('position:absolute; top:100%; left:12px; right:12px; margin-top:-2px; background:#fff; border:1px solid #cbd1db; border-radius:10px; box-shadow:0 12px 28px rgba(22,52,98,0.20); max-height:400px; overflow-y:auto; z-index:50; padding:6px;')}>
+                    <div style={css('font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#a6b0be; padding:6px 8px 8px;')}>
+                      {results.length ? (results.length + (results.length === 60 ? '+ results' : (' result' + (results.length > 1 ? 's' : '')))) : ('No nodes match “' + q + '”')}
+                    </div>
+                    {results.map((r, i) => {
+                      const t = this.TYPE[r.type] || this.TYPE.script;
+                      const active = i === this.state.activeIndex;
+                      return (
+                        <div key={r.key} onMouseEnter={() => this.setState({ activeIndex: i })} onClick={() => this.navigateTo(r.key)}
+                          style={css('padding:7px 8px; border-radius:7px; cursor:pointer; background:' + (active ? '#e6f0fb' : 'transparent') + ';')}>
+                          <div style={css('display:flex; align-items:center; gap:8px;')}>
+                            <i className={'ph ' + t.icon} style={{ fontSize: '15px', color: '#007457', flexShrink: 0 }}></i>
+                            <span style={css('flex:1; min-width:0; font-size:13px; font-weight:600; color:#1d232c; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;')}>{this.highlight(r.name, q)}</span>
+                            <span style={css('font-size:11.5px; color:#8390a2; font-variant-numeric:tabular-nums; flex-shrink:0;')}>{this.fmt(this.index[r.key].duration)}</span>
+                          </div>
+                          <div style={css('display:flex; flex-wrap:wrap; align-items:center; gap:2px 4px; margin-top:3px; padding-left:23px;')}>
+                            {this.renderTrail(this.buildTrail(r.key))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div style={css('display:flex; align-items:center; justify-content:flex-start; gap:6px; padding:8px 12px 6px; border-bottom:1px solid #e3e8ed;')}>
                 <button className="h-f7" onClick={() => this.expandAll()} style={css('display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:6px; border:1px solid #cbd1db; background:#fff; color:#475263; font-size:11.5px; font-weight:600; cursor:pointer;')}><i className="ph ph-arrows-out-line-vertical" style={{ fontSize: '13px' }}></i>Expand all</button>
                 <button className="h-f7" onClick={() => this.collapseAll()} style={css('display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:6px; border:1px solid #cbd1db; background:#fff; color:#475263; font-size:11.5px; font-weight:600; cursor:pointer;')}><i className="ph ph-arrows-in-line-vertical" style={{ fontSize: '13px' }}></i>Collapse all</button>
               </div>
               <div className="trk" style={css('flex:1; overflow-y:auto; padding:12px 8px 20px; min-height:0; display:flex; flex-direction:column; gap:1px;')}>
-                {rows.map((r) => (
-                  <div key={r.key} className={r.sel ? undefined : 'h-f7'} onClick={r.onSelect} style={r.rowStyle}>
+                {rows.map((r) => {
+                  const cls = [r.sel ? '' : 'h-f7', r.key === this.state.flashKey ? 'fx-flash' : ''].filter(Boolean).join(' ') || undefined;
+                  return (
+                  <div key={r.key} ref={el => { if (el) this._rowRefs[r.key] = el; }} className={cls} onClick={r.onSelect} style={r.rowStyle}>
                     <div style={{ width: r.indent + 'px', flexShrink: 0 }}></div>
                     <div style={r.caretStyle}><i className={'ph ' + r.caretIcon} style={{ fontSize: '13px', color: '#8390a2' }}></i></div>
                     <i className={'ph ' + r.icon} style={r.iconStyle}></i>
@@ -582,7 +757,8 @@ class TraceExplorer extends React.Component {
                     <span style={r.durStyle}>{r.durText}</span>
                     {r.drillHint && <i className="ph ph-arrow-right" style={css('font-size:14px; color:#006bd8; flex-shrink:0;')}></i>}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <div style={css('flex:1; display:flex; flex-direction:column; min-width:0;')}>
